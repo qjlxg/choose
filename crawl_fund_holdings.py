@@ -31,9 +31,9 @@ def setup_driver():
     driver = webdriver.Chrome(service=service, options=chrome_options)
     return driver
 
-# 爬取全市场基金代码列表
+# 爬取全市场基金代码列表并筛选C类基金
 def get_all_fund_codes():
-    """从天天基金网获取所有基金的代码列表。"""
+    """从天天基金网获取所有基金的代码列表，并筛选出C类基金。"""
     print("正在爬取全市场基金代码列表...")
     url = "http://fund.eastmoney.com/allfund.html"
     headers = {
@@ -46,7 +46,7 @@ def get_all_fund_codes():
         html = response.text
         soup = BeautifulSoup(html, 'lxml')
         
-        fund_list = []
+        all_fund_list = []
         # 文章中提到的 XPath 转换为 BeautifulSoup 的选择器
         # 这里使用 'div.ui-filter-item' 定位基金列表
         for div in soup.select('#code_content > div > ul > li > div'):
@@ -57,9 +57,15 @@ def get_all_fund_codes():
                 if code_name_text and len(code_name_text) > 8:
                     code = code_name_text[1:7]
                     name = code_name_text[8:]
-                    fund_list.append({'code': code, 'name': name})
-        print(f"已获取 {len(fund_list)} 只基金的代码。")
-        return fund_list
+                    all_fund_list.append({'code': code, 'name': name})
+        
+        print(f"已获取 {len(all_fund_list)} 只基金的代码。")
+
+        # 筛选出名称以 "C" 结尾的基金，即场外C类
+        c_fund_list = [fund for fund in all_fund_list if fund['name'].endswith('C')]
+        
+        print(f"已筛选出 {len(c_fund_list)} 只场外C类基金。")
+        return c_fund_list
 
     except requests.exceptions.RequestException as e:
         print(f"爬取基金代码列表失败：{e}")
@@ -150,6 +156,7 @@ def main():
     current_year = time.localtime().tm_year
     years_to_crawl = [str(current_year), str(current_year - 1), str(current_year - 2)]
     
+    # 修改此处，只获取 C 类基金的代码列表
     all_fund_data = get_all_fund_codes()
     if not all_fund_data:
         print("无法获取基金代码列表，程序退出。")
@@ -160,7 +167,7 @@ def main():
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
         
-    output_filename = os.path.join(output_dir, f"fund_holdings_{time.strftime('%Y%m%d')}.csv")
+    output_filename = os.path.join(output_dir, f"fund_holdings_C_{time.strftime('%Y%m%d')}.csv")
     
     driver = setup_driver()
     all_holdings_df = pd.DataFrame()
