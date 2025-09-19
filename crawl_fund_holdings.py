@@ -20,13 +20,8 @@ def setup_driver():
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     
-    # 尝试使用ChromeDriverManager自动管理驱动，如果失败则使用本地路径
-    try:
-        from webdriver_manager.chrome import ChromeDriverManager
-        service = Service(ChromeDriverManager().install())
-    except Exception as e:
-        print(f"警告：无法自动安装chromedriver，正在尝试使用系统默认路径。错误信息：{e}")
-        service = Service('chromedriver') # 在GitHub Actions中，chromedriver通常在系统路径中
+    # 直接使用系统路径中的chromedriver，因为工作流已确保其安装
+    service = Service('chromedriver') 
 
     driver = webdriver.Chrome(service=service, options=chrome_options)
     return driver
