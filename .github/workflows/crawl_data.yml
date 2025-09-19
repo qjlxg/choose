@@ -9,9 +9,7 @@ on:
       - '.github/workflows/**'
   schedule:
     # 调整为每周一上午 8 点运行，并指定时区为 Asia/Shanghai
-    - cron: '0 0 * * 1' # 转换为 UTC 时间，即上海时间上午8点
-    # '0 8 * * 1' 是上海时间下午4点，因为GitHub Actions的默认时区是UTC
-    # 因此，'0 0 * * 1' 在 UTC 时间是周一零点，对应上海时间是周一上午8点
+    - cron: '0 0 * * 1'
   workflow_dispatch: # 添加这行来支持手动触发
 
 jobs:
@@ -22,7 +20,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # 这行对于 git-auto-commit-action 的自动提交至关重要
           persist-credentials: 'true'
 
       - name: Set up Python
@@ -30,13 +27,32 @@ jobs:
         with:
           python-version: '3.9'
 
+      # 新增步骤：缓存 Python 依赖
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # 新增步骤：缓存 apt 包
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/crawl.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install selenium requests pandas lxml beautifulsoup4
-
+          # 检查并安装 Python 依赖
+          pip install -r requirements.txt
+          
       - name: Install Chromium and ChromeDriver
         run: |
+          # 检查并安装 Chromium 和 ChromeDriver
           sudo apt-get update
           sudo apt-get install -y chromium-browser chromium-chromedriver
 
