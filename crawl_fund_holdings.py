@@ -2,6 +2,7 @@
 """
 一个用于爬取天天基金网全市场基金持仓数据的Python脚本
 该版本增加了从本地Markdown文件解析指定基金代码的功能
+并增加了爬取股票所属行业和主题信息的功能
 """
 import os
 import time
@@ -19,7 +20,6 @@ from bs4 import BeautifulSoup
 import logging
 
 # --- 配置日志系统 ---
-# 配置日志输出到控制台，并设置级别为 INFO
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- 新增：解析Markdown文件，提取基金代码 ---
@@ -30,7 +30,7 @@ def parse_markdown_file(file_path):
     if not os.path.exists(file_path):
         logging.error(f"❌ 错误：文件未找到 -> {file_path}")
         return []
-
+    
     fund_codes = []
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
@@ -55,6 +55,42 @@ def parse_markdown_file(file_path):
     except Exception as e:
         logging.error(f"❌ 解析Markdown文件时发生错误：{e}")
         return []
+
+# --- 新增：获取股票行业和主题信息 ---
+def get_stock_info(stock_code):
+    """
+    根据股票代码爬取东方财富网，获取所属行业和概念主题。
+    """
+    info = {'所属行业': '未知', '概念主题': '未知'}
+    url = f"https://wap.eastmoney.com/quote/stock/{stock_code}.html"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'lxml')
+
+        # 尝试获取所属行业
+        industry_div = soup.find('div', string=re.compile(r'所属行业'))
+        if industry_div and industry_div.find_next_sibling('div'):
+            info['所属行业'] = industry_div.find_next_sibling('div').text.strip()
+        
+        # 尝试获取概念主题
+        theme_div = soup.find('div', string=re.compile(r'概念主题'))
+        if theme_div and theme_div.find_next_sibling('div'):
+            theme_links = theme_div.find_next_sibling('div').find_all('a')
+            themes = [link.text.strip() for link in theme_links]
+            info['概念主题'] = ', '.join(themes)
+
+    except requests.exceptions.RequestException as e:
+        logging.warning(f"❌ 爬取股票 {stock_code} 信息失败: {e}")
+        # 如果爬取失败，不影响主流程，返回默认值
+    except Exception as e:
+        logging.warning(f"❌ 解析股票 {stock_code} 页面失败: {e}")
+    
+    return info
 
 # --- 配置Selenium ---
 def setup_driver():
@@ -126,12 +162,18 @@ def parse_holdings_table(soup, fund_code, year):
         cols = row.find_all('td')
         if len(cols) >= 5:
             try:
-                # 核心修改：将列名改为中文
+                stock_code = cols[1].text.strip() if len(cols) > 1 else ''
+                
+                # 获取股票行业和主题信息
+                stock_info = get_stock_info(stock_code)
+                
                 data = {
                     '基金代码': fund_code,
                     '年份': year,
-                    '股票代码': cols[1].text.strip() if len(cols) > 1 else '',
+                    '股票代码': stock_code,
                     '股票名称': cols[2].text.strip() if len(cols) > 2 else '',
+                    '所属行业': stock_info['所属行业'],
+                    '概念主题': stock_info['概念主题'],
                     '持仓占比': cols[3].text.strip() if len(cols) > 3 else '',
                     '持股数': cols[4].text.strip() if len(cols) > 4 else '',
                     '市值': cols[5].text.strip() if len(cols) > 5 else '',
@@ -258,7 +300,9 @@ def main():
     current_year = time.localtime().tm_year
     years_to_crawl = [str(current_year), str(current_year - 1), str(current_year - 2)]
     
+    # 增加爬取股票信息的延时，防止请求过快被封
     request_delay = 1
+    stock_info_delay = 0.5 
 
     logging.info("=== 天天基金持仓数据爬取器 ===")
     logging.info(f"目标年份: {', '.join(years_to_crawl)}")
@@ -276,7 +320,7 @@ def main():
         os.makedirs(output_dir)
         
     timestamp = time.strftime('%Y%m%d_%H%M%S')
-    output_filename = os.path.join(output_dir, f"target_fund_holdings_{timestamp}.csv")
+    output_filename = os.path.join(output_dir, f"target_fund_holdings_with_info_{timestamp}.csv")
     
     driver = setup_driver()
     if driver is None:
