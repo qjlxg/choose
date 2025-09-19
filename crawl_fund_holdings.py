@@ -126,15 +126,16 @@ def parse_holdings_table(soup, fund_code, year):
         cols = row.find_all('td')
         if len(cols) >= 5:
             try:
+                # 核心修改：将列名改为中文
                 data = {
-                    'fund_code': fund_code,
-                    'year': year,
-                    'stock_code': cols[1].text.strip() if len(cols) > 1 else '',
-                    'stock_name': cols[2].text.strip() if len(cols) > 2 else '',
-                    'proportion': cols[3].text.strip() if len(cols) > 3 else '',
-                    'shares': cols[4].text.strip() if len(cols) > 4 else '',
-                    'market_value': cols[5].text.strip() if len(cols) > 5 else '',
-                    'report_date': cols[0].text.strip() if len(cols) > 0 else ''
+                    '基金代码': fund_code,
+                    '年份': year,
+                    '股票代码': cols[1].text.strip() if len(cols) > 1 else '',
+                    '股票名称': cols[2].text.strip() if len(cols) > 2 else '',
+                    '持仓占比': cols[3].text.strip() if len(cols) > 3 else '',
+                    '持股数': cols[4].text.strip() if len(cols) > 4 else '',
+                    '市值': cols[5].text.strip() if len(cols) > 5 else '',
+                    '报告日期': cols[0].text.strip() if len(cols) > 0 else ''
                 }
                 holdings.append(data)
             except Exception as e:
