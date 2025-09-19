@@ -42,6 +42,3 @@ jobs:
           file_pattern: 'fund_data/*.csv'
 
 
-现在，在 GitHub 仓库的 **Actions** 页面，你会看到一个名为 **Crawl Fund Holdings** 的工作流。点击它，在右侧会有一个 **Run workflow** 按钮，你可以随时点击它来手动运行这个脚本。
-
-如果你希望了解如何配置 GitHub Actions 的环境变量或密钥，以便在脚本中安全地使用敏感信息，请随时告诉我。
