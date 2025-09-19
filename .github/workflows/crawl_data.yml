@@ -1,8 +1,17 @@
 name: Crawl Fund Holdings
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'crawl_fund_holdings.py'
+      - '.github/workflows/**'
   schedule:
-    - cron: '0 8 * * 1' # 每周一上午8点运行
+    # 调整为每周一上午 8 点运行，并指定时区为 Asia/Shanghai
+    - cron: '0 0 * * 1' # 转换为 UTC 时间，即上海时间上午8点
+    # '0 8 * * 1' 是上海时间下午4点，因为GitHub Actions的默认时区是UTC
+    # 因此，'0 0 * * 1' 在 UTC 时间是周一零点，对应上海时间是周一上午8点
   workflow_dispatch: # 添加这行来支持手动触发
 
 jobs:
@@ -40,5 +49,3 @@ jobs:
         with:
           commit_message: "feat: 更新基金持仓数据"
           file_pattern: 'fund_data/*.csv'
-
-
