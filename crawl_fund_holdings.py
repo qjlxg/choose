@@ -14,7 +14,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium.common.exceptions import TimeoutException, WebDriverException, StaleElementReferenceException
 from bs4 import BeautifulSoup
 import logging
 
@@ -36,21 +36,18 @@ def parse_markdown_file(file_path):
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # 使用正则表达式匹配表格行
         lines = content.strip().split('\n')
         for line in lines:
-            # 匹配包含 '| 行动信号 |' 的表头，跳过
             if '| 行动信号' in line:
                 continue
             
-            # 使用更宽泛的匹配来处理表格内容
             parts = [p.strip() for p in line.split('|')]
             if len(parts) >= 9:
                 fund_code = parts[1]
-                action_signal = parts[8].lower() # 转换为小写，方便匹配
+                action_signal = parts[8].lower()
 
                 if "弱买入" in action_signal or "强买入" in action_signal:
-                    fund_codes.append({'code': fund_code, 'name': 'N/A'}) # 名称设为N/A，因为报告中未提供
+                    fund_codes.append({'code': fund_code, 'name': 'N/A'})
         
         logging.info(f"✅ 从报告中成功提取了 {len(fund_codes)} 个目标基金代码。")
         return fund_codes
@@ -145,7 +142,7 @@ def parse_holdings_table(soup, fund_code, year):
                 continue
     return holdings
 
-# --- 爬取指定基金持仓数据 ---
+# --- 爬取指定基金持仓数据（已优化，增加重试机制） ---
 def get_fund_holdings(driver, fund_code, years_to_crawl, max_retries=3):
     """
     爬取指定基金在近N年内的持仓数据。
@@ -195,29 +192,45 @@ def get_fund_holdings(driver, fund_code, years_to_crawl, max_retries=3):
         try:
             logging.info(f"正在爬取 {year} 年持仓数据...")
             
-            year_selectors = [
-                f"//label[@value='{year}']",
-                f"//div[@id='pagebar']//label[@value='{year}']",
-            ]
-            
+            retries = 3
             year_button = None
-            for selector in year_selectors:
+            for i in range(retries):
                 try:
-                    year_button = WebDriverWait(driver, 10).until(
-                        EC.element_to_be_clickable((By.XPATH, selector))
-                    )
-                    break
-                except TimeoutException:
-                    continue
-            
-            if not year_button:
-                logging.warning(f"未找到基金 {fund_code} 在 {year} 年的持仓按钮，跳过。")
+                    year_selectors = [
+                        f"//label[@value='{year}']",
+                        f"//div[@id='pagebar']//label[@value='{year}']",
+                    ]
+                    
+                    found = False
+                    for selector in year_selectors:
+                        try:
+                            year_button = WebDriverWait(driver, 5).until(
+                                EC.element_to_be_clickable((By.XPATH, selector))
+                            )
+                            found = True
+                            break
+                        except TimeoutException:
+                            continue
+                    
+                    if found:
+                        driver.execute_script("arguments[0].scrollIntoView();", year_button)
+                        time.sleep(1)
+                        year_button.click()
+                        break
+                    else:
+                        logging.warning(f"未找到基金 {fund_code} 在 {year} 年的持仓按钮，跳过。")
+                        break
+                
+                except StaleElementReferenceException:
+                    logging.warning(f"检测到 StaleElementReferenceException，正在重新尝试定位... (第 {i+1}/{retries} 次)")
+                    time.sleep(1)
+                    if i == retries - 1:
+                         logging.error(f"多次重试后仍出现 StaleElementReferenceException，放弃爬取 {year} 年数据。")
+                         break
+                
+            if not year_button or (i == retries - 1 and isinstance(year_button, StaleElementReferenceException)):
                 continue
-            
-            driver.execute_script("arguments[0].scrollIntoView();", year_button)
-            time.sleep(1)
-            year_button.click()
-            
+
             WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.ID, "cctable"))
             )
@@ -241,17 +254,14 @@ def get_fund_holdings(driver, fund_code, years_to_crawl, max_retries=3):
 
 def main():
     """主函数，执行爬取任务。"""
-    # 定义需要爬取的年份范围
     current_year = time.localtime().tm_year
     years_to_crawl = [str(current_year), str(current_year - 1), str(current_year - 2)]
     
-    # 改进：配置参数
-    request_delay = 1  # 请求延时
+    request_delay = 1
 
     logging.info("=== 天天基金持仓数据爬取器 ===")
     logging.info(f"目标年份: {', '.join(years_to_crawl)}")
     
-    # --- 核心修改：从Markdown文件获取基金代码列表 ---
     report_file = 'market_monitor_report.md'
     fund_list_to_crawl = parse_markdown_file(report_file)
     if not fund_list_to_crawl:
@@ -260,7 +270,6 @@ def main():
 
     logging.info(f"📊 准备爬取 {len(fund_list_to_crawl)} 只指定基金")
     
-    # 设置一个文件路径来存储结果
     output_dir = "fund_data"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -268,7 +277,6 @@ def main():
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     output_filename = os.path.join(output_dir, f"target_fund_holdings_{timestamp}.csv")
     
-    # 尝试启动 WebDriver，如果失败则直接退出
     driver = setup_driver()
     if driver is None:
         return
