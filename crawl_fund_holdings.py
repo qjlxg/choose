@@ -20,8 +20,9 @@ def setup_driver():
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     
-    # 直接使用系统路径中的chromedriver，因为工作流已确保其安装
-    service = Service('chromedriver') 
+    # 修正后的代码：直接指定 chromedriver 的完整路径
+    # 在 GitHub Actions 的 Ubuntu 环境中，chromedriver 通常位于此路径
+    service = Service('/usr/lib/chromium-browser/chromedriver')
 
     driver = webdriver.Chrome(service=service, options=chrome_options)
     return driver
