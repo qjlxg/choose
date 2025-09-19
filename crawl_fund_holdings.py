@@ -11,6 +11,10 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from bs4 import BeautifulSoup
+# 新增的导入，用于显式等待
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
 
 # 配置Selenium
 def setup_driver():
@@ -75,16 +79,26 @@ def get_fund_holdings(driver, fund_code, years_to_crawl):
     
     try:
         driver.get(base_url)
-        time.sleep(3)  # 等待页面加载
+        # 用显式等待代替固定的 time.sleep()
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "cctable"))
+        )
         
         for year in years_to_crawl:
             print(f"正在爬取基金 {fund_code} 的 {year} 年持仓数据...")
             try:
                 # 寻找年份选择按钮并点击
                 year_button_xpath = f"//*[@id='pagebar']/div/label[@value='{year}']"
-                year_button = driver.find_element(By.XPATH, year_button_xpath)
+                # 使用显式等待，等待按钮可点击
+                year_button = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.XPATH, year_button_xpath))
+                )
                 year_button.click()
-                time.sleep(2)  # 等待数据加载
+                
+                # 等待表格内容更新
+                WebDriverWait(driver, 5).until(
+                    EC.presence_of_element_located((By.ID, "cctable"))
+                )
                 
                 # 获取页面HTML内容
                 page_source = driver.page_source
@@ -116,6 +130,10 @@ def get_fund_holdings(driver, fund_code, years_to_crawl):
                         }
                         fund_holdings.append(data)
                         
+            # 如果找不到按钮或超时，则捕获异常并跳过
+            except TimeoutException:
+                print(f"基金 {fund_code} 在 {year} 年的持仓按钮或表格不存在，跳过。")
+                continue
             except Exception as e:
                 print(f"爬取基金 {fund_code} 的 {year} 年数据时发生错误：{e}")
                 continue
