@@ -25,7 +25,7 @@ jobs:
       
       - run: mkdir -p data
       
-      - run: python fund_crawler.py --all --max-codes 5 --years 1
+      - run: python fund_crawler.py
       
       - name: Commit changes
         uses: stefanzweifel/git-auto-commit-action@v5
