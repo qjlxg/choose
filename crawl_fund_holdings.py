@@ -13,6 +13,7 @@ import re
 from fake_useragent import UserAgent
 import os
 from datetime import datetime
+import re
 
 class FundDataCrawler:
     def __init__(self):
@@ -301,25 +302,54 @@ class FundDataCrawler:
         print(f"最高集中度基金: {concentration.index[0]} (集中度: {concentration.iloc[0]:.1f}%)")
         print(f"平均集中度: {concentration.mean():.1f}%")
 
+def get_fund_codes_from_report(file_path):
+    """
+    从市场监控报告中读取“弱买入”和“强买入”的基金代码。
+    """
+    fund_codes = []
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            # 使用正则表达式匹配“弱买入”或“强买入”行
+            pattern = re.compile(r'\|\s*(\d{6})\s*\|.*?\s*\|\s*(弱买入|强买入)\s*\|')
+            matches = pattern.findall(content)
+            for code, signal in matches:
+                # 确保每个代码只添加一次
+                if code not in fund_codes:
+                    fund_codes.append(code)
+        print(f"从报告中获取到 {len(fund_codes)} 个待爬取的基金代码。")
+    except FileNotFoundError:
+        print(f"错误: 未找到文件 {file_path}")
+        return []
+    except Exception as e:
+        print(f"读取文件时出错: {e}")
+        return []
+    
+    return fund_codes
+
 def main():
     """主程序"""
     crawler = FundDataCrawler()
     
     try:
-        # 步骤1: 获取全市场基金列表
-        print("=== 步骤1: 获取基金列表 ===")
-        fund_list = crawler.get_all_fund_codes()
+        # 步骤1: 从报告文件中获取基金列表
+        print("=== 步骤1: 从报告中读取基金列表 ===")
+        report_file = 'market_monitor_report.md'
+        codes_to_crawl = get_fund_codes_from_report(report_file)
         
-        if fund_list.empty:
-            print("无法获取基金列表，程序退出")
+        if not codes_to_crawl:
+            print("未找到需要爬取的基金代码，程序退出")
             return
         
-        # 步骤2: 批量爬取持仓数据（这里限制为前50只基金用于测试）
+        # 将代码列表转换为DataFrame格式以适应原有函数
+        fund_list_df = pd.DataFrame({'fund_code': codes_to_crawl, 'fund_name': ''})
+        
+        # 步骤2: 批量爬取持仓数据
         print("\n=== 步骤2: 批量爬取持仓数据 ===")
-        years_to_crawl = [2023, 2024]  # 指定爬取年份
+        years_to_crawl = [2024]  # 指定爬取年份
         holdings_data = crawler.batch_crawl_fund_holdings(
-            fund_list, 
-            max_funds=50,  # 限制爬取数量，避免耗时过长
+            fund_list_df, 
+            max_funds=len(codes_to_crawl),
             years=years_to_crawl
         )
         
