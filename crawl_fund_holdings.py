@@ -18,6 +18,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException, StaleElementReferenceException
 from bs4 import BeautifulSoup
 import logging
+import random
 
 # --- 配置日志系统 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -56,15 +57,30 @@ def parse_markdown_file(file_path):
         logging.error(f"❌ 解析Markdown文件时发生错误：{e}")
         return []
 
+# --- 新增：股票信息缓存 ---
+stock_info_cache = {}
+
+# --- 新增：User-Agent池 ---
+user_agent_pool = [
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
+]
+
 # --- 新增：获取股票行业和主题信息 ---
 def get_stock_info(stock_code):
     """
     根据股票代码爬取东方财富网，获取所属行业和概念主题。
     """
+    if stock_code in stock_info_cache:
+        return stock_info_cache[stock_code]
+    
     info = {'所属行业': '未知', '概念主题': '未知'}
     url = f"https://wap.eastmoney.com/quote/stock/{stock_code}.html"
     headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        "User-Agent": random.choice(user_agent_pool)
     }
     
     try:
@@ -84,11 +100,16 @@ def get_stock_info(stock_code):
             themes = [link.text.strip() for link in theme_links]
             info['概念主题'] = ', '.join(themes)
 
+        stock_info_cache[stock_code] = info
+
     except requests.exceptions.RequestException as e:
         logging.warning(f"❌ 爬取股票 {stock_code} 信息失败: {e}")
         # 如果爬取失败，不影响主流程，返回默认值
     except Exception as e:
         logging.warning(f"❌ 解析股票 {stock_code} 页面失败: {e}")
+    
+    # 动态延时
+    time.sleep(random.uniform(0.5, 1.5))
     
     return info
 
@@ -301,7 +322,7 @@ def main():
     years_to_crawl = [str(current_year), str(current_year - 1), str(current_year - 2)]
     
     # 增加爬取股票信息的延时，防止请求过快被封
-    request_delay = 1
+    request_delay = random.uniform(1, 3)
     stock_info_delay = 0.5 
 
     logging.info("=== 天天基金持仓数据爬取器 ===")
