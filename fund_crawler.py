@@ -136,8 +136,8 @@ def main():
     df = pd.DataFrame(signals)
     
     os.makedirs('data', exist_ok=True)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f"data/买入信号基金_{timestamp}.csv"
+    today_date = datetime.now().strftime('%Y%m%d')
+    filename = f"data/买入信号基金_{today_date}.csv"
     df.to_csv(filename, index=False, encoding='utf-8-sig')
     
     print(f"\n🎉 完成！总 {len(df)} 条记录")
