@@ -1,0 +1,83 @@
+name: Crawl Fund Holdings
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'crawl_fund_holdings.py'
+      - 'requirements.txt'
+      - 'market_monitor_report.md'
+      - '.github/workflows/**'
+  schedule:
+    # 每周一上午 8 点运行 (UTC时间，对应北京时间周一20点)
+    - cron: '0 12 * * 1'
+  workflow_dispatch: # 支持手动触发
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: 'true'
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      # 缓存 Python 依赖
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # 缓存 apt 包
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/crawl_fund_holdings.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser chromium-chromedriver
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run fund holdings crawler
+        run: |
+          python crawl_fund_holdings.py
+
+      - name: Check for changes
+        id: changes
+        run: |
+          git add fund_data/
+          if git diff --staged --quiet; then
+            echo "changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit and push changes
+        if: steps.changes.outputs.changes == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: 更新基金持仓数据 [{{ github.run_number }}]"
+          file_pattern: |
+            fund_data/*.csv
+            fund_data/*_funds_*.txt
+          commit_user_name: "GitHub Actions Bot"
+          commit_user_email: "actions@github.com"
