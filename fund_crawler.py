@@ -14,6 +14,7 @@ try:
     import pandas as pd
     import numpy as np
     from bs4 import BeautifulSoup
+    from lxml import etree # 引入lxml以提高BeautifulSoup解析速度
 except ImportError as e:
     print(f"❌ 缺少必要的Python库：{e}")
     print("请使用以下命令安装：pip install requests pandas beautifulsoup4 lxml")
@@ -33,6 +34,10 @@ class FundSignalCrawler:
         if not os.path.exists(md_file):
             print(f"❌ 未找到 {md_file} 文件")
             print("请确保该文件与脚本在同一个目录下。")
+            # 调试：显示当前目录文件
+            print("📁 当前目录文件:")
+            for f in os.listdir('.'):
+                print(f"    - {f}")
             return []
 
         with open(md_file, 'r', encoding='utf-8') as f:
@@ -40,9 +45,10 @@ class FundSignalCrawler:
 
         print("📖 解析 Markdown 表格...")
         print(f"📄 文件大小: {len(content)} 字符")
-
+        print(f"🔍 前200字符预览:\n{content[:200]}...")
+        
         # 匹配包含"基金代码"和"行动信号"的表格
-        table_pattern = r'(?s).*?\|.*?基金代码.*?\|.*?\|.*?\|.*?\|.*?\|.*?\|.*?\|.*?\|.*?\|.*?\|.*?行动信号.*?\|.*?(?=\n\n|\Z)'
+        table_pattern = r'(?s).*?\|.*?(?:基金代码).*?\|.*?\|.*?\|.*?\|.*?\|.*?\|.*?\|.*?\|.*?\|.*?\|.*?行动信号.*?\|.*?(?=\n\n|\Z)'
         table_match = re.search(table_pattern, content, re.DOTALL | re.IGNORECASE)
 
         if not table_match:
@@ -56,23 +62,23 @@ class FundSignalCrawler:
                 if line.startswith('|') and '基金代码' in line and '行动信号' in line:
                     in_table = True
                     table_lines = [line]
-                    print(f"✅ 找到表头...")
+                    print(f"✅ 找到表头: {line[:80]}...")
                     continue
                 if in_table:
                     if line.startswith('|') and len(line.split('|')) > 8:
                         table_lines.append(line)
-                    elif not line.strip() or not line.startswith('|'):
+                    elif not line.strip() and len(table_lines) > 1: # 当遇到空行时停止
                         in_table = False
-
+            
             if table_lines:
-                print(f"✅ 找到 {len(table_lines) - 1} 行表格数据")
+                print(f"✅ 找到 {len(table_lines)} 行表格数据")
                 return self._parse_table_lines(table_lines)
             else:
                 print("❌ 备用解析也失败")
                 return []
 
         table_content = table_match.group(0)
-        print(f"✅ 找到表格内容，总计 {len(table_content)} 字符")
+        print(f"✅ 找到表格: {len(table_content)} 字符")
 
         lines = [line.strip() for line in table_content.split('\n') if line.strip()]
 
@@ -80,6 +86,7 @@ class FundSignalCrawler:
         for i, line in enumerate(lines):
             if line.startswith('|') and '基金代码' in line and '行动信号' in line:
                 header_line_index = i
+                print(f"✅ 表头行 {i}: {line}")
                 break
 
         if header_line_index == -1:
@@ -90,22 +97,44 @@ class FundSignalCrawler:
 
     def _parse_table_lines(self, table_lines):
         """解析表格行"""
-        fund_codes = []
-        data_lines = [line for line in table_lines if line.strip().count('|') > 8 and '|-' not in line]
+        fund_signals = []
+        data_start = 2 if len(table_lines) > 2 and '|---' in table_lines[1] else 1
+        
+        print(f"📊 开始解析数据行 (从第 {data_start} 行)")
 
-        print(f"📊 正在解析 {len(data_lines)} 行数据...")
-
-        for line in data_lines:
-            parts = [p.strip() for p in line.split('|')]
-            if len(parts) >= 10:
-                fund_code = parts[1]
-                action_signal = parts[-2]
-                if re.match(r'^\d{6}$', fund_code) and '买入' in action_signal:
-                    fund_codes.append(fund_code)
-
-        print(f"📊 最终找到 {len(fund_codes)} 只买入信号基金")
+        for i, line in enumerate(table_lines[data_start:], data_start):
+            if not line.startswith('|'):
+                continue
+            
+            parts = line.split('|')
+            if len(parts) < 10:  # 至少10个 | 分隔符
+                print(f"⚠️ 行 {i} 格式错误: {line[:50]}...")
+                continue
+            
+            cells = [part.strip() for part in parts[1:-1]]  # 去掉首尾空单元格
+            
+            if len(cells) < 8:
+                print(f"⚠️ 行 {i} 单元格不足: {len(cells)} 个")
+                continue
+            
+            fund_code = cells[0].strip()
+            action_signal = cells[-1].strip()  # 最后一列
+            
+            print(f"🔍 行 {i}: 代码={fund_code}, 信号={action_signal}")
+            
+            if re.match(r'^\d{6}$', fund_code) and '买入' in action_signal:
+                fund_signals.append({
+                    'fund_code': fund_code,
+                    'signal': action_signal
+                })
+                print(f"    ✅ 添加: {fund_code} ({action_signal})")
+            else:
+                print(f"    ❌ 跳过: 代码={fund_code}, 信号={action_signal}")
+        
+        fund_codes = [fs['fund_code'] for fs in fund_signals]
+        print(f"📊 最终结果: {len(fund_signals)} 只买入信号基金")
         if fund_codes:
-            print(f"📋 基金列表: {', '.join(fund_codes[:5])}{'...' if len(fund_codes) > 5 else ''}")
+            print(f"    📋 基金列表: {', '.join(fund_codes[:5])}{'...' if len(fund_codes) > 5 else ''}")
         
         return fund_codes
 
@@ -117,12 +146,16 @@ class FundSignalCrawler:
             if not match:
                 print("❌ 未找到 apidata 变量")
                 return None
-
+            
             json_str = match.group(1)
-            json_str = json_str.replace("'", '"')
-            json_str = re.sub(r'(\w+):', r'"\1":', json_str)
+            json_str = re.sub(r"(\b\w+\b)'?\s*:", r'"\1":', json_str)
+            json_str = re.sub(r":\s*'([^']*)'?", r': "\1"', json_str)
+            json_str = json_str.replace('\\"', '"').replace("\\'", "'")
+            json_str = re.sub(r'\\u003c', '<', json_str)
+            json_str = re.sub(r'\\u003e', '>', json_str)
+            
             return json.loads(json_str)
-
+            
         except json.JSONDecodeError as e:
             print(f"❌ JSON 解析失败: {e}")
             return None
@@ -150,7 +183,7 @@ class FundSignalCrawler:
         """爬取单年持仓"""
         url = "https://fundf10.eastmoney.com/FundArchivesDatas.aspx"
         params = {'type': 'jjcc', 'code': fund_code, 'topline': '10', 'year': year}
-
+        
         try:
             print(f"  请求 {year} 年持仓数据...")
             response = self.session.get(url, params=params, timeout=10)
@@ -159,11 +192,11 @@ class FundSignalCrawler:
             if not data or 'content' not in data:
                 print(f"  ❌ {year}年无数据")
                 return []
-
+            
             soup = BeautifulSoup(data['content'], 'lxml')
             holdings = []
             boxes = soup.find_all('div', class_='box')
-
+            
             for box in boxes:
                 title = box.find('h4', class_='t')
                 if not title:
@@ -291,3 +324,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
