@@ -96,53 +96,42 @@ def analyze_holdings():
 
         sector_summary = combined_df.groupby(['年份', '板块'])['占净值比例'].sum().unstack().fillna(0)
         
-        # 修复了类型错误，对数值进行格式化
-        formatted_sector_summary = sector_summary.applymap(lambda x: f"{x:.2f}%" if isinstance(x, (int, float)) and x > 0 else "")
+        # 格式化表格数据
+        formatted_sector_summary = sector_summary.copy()
+        for col in formatted_sector_summary.columns:
+            formatted_sector_summary[col] = formatted_sector_summary[col].apply(lambda x: f"{x:.2f}%" if x > 0 else "")
         report.append("#### 板块偏好（占净值比例之和）")
         report.append(formatted_sector_summary.to_markdown())
 
         concentration_summary = combined_df.groupby('季度')['占净值比例'].sum()
         
-        # 修复了类型错误，对数值进行格式化
+        # 格式化表格数据
         formatted_concentration_summary = pd.DataFrame(concentration_summary)
         formatted_concentration_summary['占净值比例'] = formatted_concentration_summary['占净值比例'].apply(lambda x: f"{x:.2f}%")
         report.append("\n#### 前十大持仓集中度（占净值比例之和）")
         report.append(formatted_concentration_summary.to_markdown())
 
-        # 3. 动态趋势总结和建议
-        report.append("\n### 3. 趋势总结和投资建议")
-        report.append("> **免责声明**：本报告基于历史持仓数据进行分析，不构成任何投资建议。投资有风险，入市需谨慎。")
-        report.append(f"\n基于对基金 **{fund_code}** 的历史持仓数据分析，本报告得出以下关键观察结果：")
+        # 3. 趋势总结分析
+        report.append("\n### 3. 趋势总结")
         
         # 集中度变化分析
         if len(concentration_summary) > 1:
+            first_q = concentration_summary.index[0]
+            last_q = concentration_summary.index[-1]
             first_concentration = concentration_summary.iloc[0]
             last_concentration = concentration_summary.iloc[-1]
-            concentration_diff = last_concentration - first_concentration
             
-            if concentration_diff > 10:
-                report.append("- **持仓集中度**：在分析期内，该基金的持仓集中度显著**上升**。这表明基金经理正将资金集中到其看好的少数股票上。这可能带来更高的回报，但同时也伴随着更高的风险。")
-            elif concentration_diff < -10:
-                report.append("- **持仓集中度**：在分析期内，该基金的持仓集中度显著**下降**。这表明基金经理正在分散投资，这通常有助于降低风险，但可能牺牲部分超额收益。")
-            else:
-                report.append("- **持仓集中度**：该基金的持仓集中度在分析期内相对**稳定**。这可能表明基金经理的投资风格较为稳健，并坚持其既定的投资策略。")
+            trend = "上升" if last_concentration > first_concentration else "下降" if last_concentration < first_concentration else "保持稳定"
+            report.append(f"- **持仓集中度**：从 {first_q} 到 {last_q}，前十大持仓集中度从 {first_concentration:.2f}% {trend}到 {last_concentration:.2f}%。这表明基金经理在分析期内，**{ '更倾向于' if trend == '上升' else '降低了' }** 投资集中度。")
 
         # 板块偏好变化分析
         if len(sector_summary) > 1:
-            first_year_summary = sector_summary.iloc[0]
-            last_year_summary = sector_summary.iloc[-1]
-            
-            first_dominant_sector = first_year_summary.idxmax()
-            last_dominant_sector = last_year_summary.idxmax()
-            
-            if first_dominant_sector != last_dominant_sector:
-                report.append(f"- **板块偏好**：基金的投资偏好在分析期内发生了明显变化，从最初主要集中在**{first_dominant_sector}**转向了**{last_dominant_sector}**。这可能反映了基金经理对市场热点或宏观经济的最新判断。")
+            first_year_summary = sector_summary.iloc[0].idxmax()
+            last_year_summary = sector_summary.iloc[-1].idxmax()
+            if first_year_summary != last_year_summary:
+                report.append(f"- **板块偏好**：基金的投资偏好在分析期内发生了显著变化。最初主要集中在**{first_year_summary}**，而最新季度则转向了**{last_year_summary}**。这可能反映了基金经理对市场热点或行业前景的最新判断。")
             else:
-                report.append(f"- **板块偏好**：该基金在分析期内保持了相对稳定的投资风格，主要偏向于**{first_dominant_sector}**板块。")
-        
-        # 增加通用建议
-        report.append("\n**总结与建议：**")
-        report.append("  在考虑投资该基金时，建议将上述分析结果与其他因素结合考量，例如基金的过往业绩、基金经理的管理经验、基金规模以及费率等。")
+                report.append(f"- **板块偏好**：基金在分析期内保持了较为稳定的投资风格，主要偏向于**{first_year_summary}**板块。")
 
     with open('analysis_report.md', 'w', encoding='utf-8') as f:
         f.write('\n'.join(report))
