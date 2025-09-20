@@ -3,6 +3,10 @@ import glob
 import os
 
 def analyze_holdings():
+    """
+    遍历 fund_data 目录，对每个基金代码的持仓数据进行合并和分析，
+    并将结果输出到 analysis_report.md 文件中。
+    """
     base_path = 'fund_data'
     all_files = glob.glob(os.path.join(base_path, "*.csv"))
 
@@ -91,12 +95,43 @@ def analyze_holdings():
         combined_df['板块'] = combined_df['股票代码'].astype(str).str[:3].map(sector_mapping).fillna('其他')
 
         sector_summary = combined_df.groupby(['年份', '板块'])['占净值比例'].sum().unstack().fillna(0)
+        
+        # 格式化表格数据
+        formatted_sector_summary = sector_summary.copy()
+        for col in formatted_sector_summary.columns:
+            formatted_sector_summary[col] = formatted_sector_summary[col].apply(lambda x: f"{x:.2f}%" if x > 0 else "")
         report.append("#### 板块偏好（占净值比例之和）")
-        report.append(sector_summary.to_markdown())
+        report.append(formatted_sector_summary.to_markdown())
 
         concentration_summary = combined_df.groupby('季度')['占净值比例'].sum()
+        
+        # 格式化表格数据
+        formatted_concentration_summary = pd.DataFrame(concentration_summary)
+        formatted_concentration_summary['占净值比例'] = formatted_concentration_summary['占净值比例'].apply(lambda x: f"{x:.2f}%")
         report.append("\n#### 前十大持仓集中度（占净值比例之和）")
-        report.append(concentration_summary.to_markdown())
+        report.append(formatted_concentration_summary.to_markdown())
+
+        # 3. 趋势总结分析
+        report.append("\n### 3. 趋势总结")
+        
+        # 集中度变化分析
+        if len(concentration_summary) > 1:
+            first_q = concentration_summary.index[0]
+            last_q = concentration_summary.index[-1]
+            first_concentration = concentration_summary.iloc[0]
+            last_concentration = concentration_summary.iloc[-1]
+            
+            trend = "上升" if last_concentration > first_concentration else "下降" if last_concentration < first_concentration else "保持稳定"
+            report.append(f"- **持仓集中度**：从 {first_q} 到 {last_q}，前十大持仓集中度从 {first_concentration:.2f}% {trend}到 {last_concentration:.2f}%。这表明基金经理在分析期内，**{ '更倾向于' if trend == '上升' else '降低了' }** 投资集中度。")
+
+        # 板块偏好变化分析
+        if len(sector_summary) > 1:
+            first_year_summary = sector_summary.iloc[0].idxmax()
+            last_year_summary = sector_summary.iloc[-1].idxmax()
+            if first_year_summary != last_year_summary:
+                report.append(f"- **板块偏好**：基金的投资偏好在分析期内发生了显著变化。最初主要集中在**{first_year_summary}**，而最新季度则转向了**{last_year_summary}**。这可能反映了基金经理对市场热点或行业前景的最新判断。")
+            else:
+                report.append(f"- **板块偏好**：基金在分析期内保持了较为稳定的投资风格，主要偏向于**{first_year_summary}**板块。")
 
     with open('analysis_report.md', 'w', encoding='utf-8') as f:
         f.write('\n'.join(report))
