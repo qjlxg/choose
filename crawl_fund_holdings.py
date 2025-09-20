@@ -5,6 +5,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 import pandas as pd
 import numpy as np
@@ -45,7 +47,7 @@ class FundDataCrawler:
     def setup_driver(self):
         """初始化selenium浏览器驱动"""
         chrome_options = Options()
-        chrome_options.add_argument('--headless')  # 无头模式
+        chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
@@ -53,7 +55,9 @@ class FundDataCrawler:
         chrome_options.add_argument(f'--user-agent={self.ua.random}')
         
         try:
-            self.driver = webdriver.Chrome(options=chrome_options)
+            # 使用 webdriver-manager 自动下载并安装合适的 chromedriver
+            service = Service(ChromeDriverManager().install())
+            self.driver = webdriver.Chrome(service=service, options=chrome_options)
             self.wait = WebDriverWait(self.driver, 10)
         except Exception as e:
             print(f"浏览器驱动初始化失败: {e}")
