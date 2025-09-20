@@ -38,7 +38,17 @@ def analyze_holdings():
         df_list = []
         for f in files:
             try:
-                df = pd.read_csv(f)
+                # 尝试读取文件，处理可能存在的额外列
+                df = pd.read_csv(f, engine='python')
+                
+                # 统一列名以确保合并成功
+                df.rename(columns={'占净值 比例': '占净值比例', '持仓市值 （万元）': '持仓市值'}, inplace=True)
+                
+                # 过滤掉 2025 年文件中的冗余列
+                # 这里假设 '最新价' 是一直存在的，如果未来有其他列，需要调整
+                if '最新价' in df.columns:
+                    df = df.loc[:, ['序号', '股票代码', '股票名称', '相关资讯', '占净值比例', '持股数 （万股）', '持仓市值', '季度']]
+                    
                 df['基金代码'] = fund_code
                 df_list.append(df)
             except Exception as e:
@@ -49,13 +59,6 @@ def analyze_holdings():
             
         combined_df = pd.concat(df_list, ignore_index=True)
         
-        # 确保列名一致，并重命名以方便处理
-        combined_df.rename(columns={'占净值 比例': '占净值比例', '持仓市值 （万元）': '持仓市值', '股票代码': '股票代码'}, inplace=True)
-
-        # 针对 2025 年文件，处理额外的列
-        if '最新价' in combined_df.columns:
-            combined_df.drop(columns=['最新价', '涨跌幅'], inplace=True, errors='ignore')
-            
         # 清理季度列，提取年份和季度信息
         combined_df['季度'] = combined_df['季度'].str.replace('年', '-Q')
         combined_df['年份'] = combined_df['季度'].str.split('-').str[0].astype(int)
