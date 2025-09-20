@@ -4,234 +4,251 @@ import numpy as np
 import time
 import os
 import re
-import ast  # 用于安全解析
+import ast
 from bs4 import BeautifulSoup
-from urllib.parse import urlencode
 from datetime import datetime
-import argparse
 
 class FundHoldingsCrawler:
-    def __init__(self, base_url="https://fundf10.eastmoney.com"):
-        self.base_url = base_url
+    def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': 'https://fund.eastmoney.com/'
         })
     
-    def extract_json_from_jsonp(self, jsonp_response):
-        """从JSONP响应中提取并解析JSON数据（使用ast.literal_eval安全解析）"""
+    def extract_json_from_jsonp(self, text):
+        """提取JSONP中的JSON数据"""
         try:
             # 匹配 var XXX = {...};
             pattern = r'var\s+\w+\s*=\s*({.*?});?\s*$'
-            match = re.search(pattern, jsonp_response, re.DOTALL | re.MULTILINE)
+            match = re.search(pattern, text, re.DOTALL)
             if match:
                 json_str = match.group(1)
-                # ast.literal_eval 能处理单引号和简单结构
-                data = ast.literal_eval(json_str)
-                return data
-            else:
-                print(f"未匹配到JSONP模式: {jsonp_response[:100]}...")
-                return None
-        except (ast.literal_eval, SyntaxError, ValueError) as e:
+                # 替换单引号为双引号，处理HTML中的单引号问题
+                json_str = re.sub(r"'([^']*)':", r'"\1":', json_str)
+                json_str = re.sub(r":\s*'([^']*)'", r': "\1"', json_str)
+                return json.loads(json_str)
+        except Exception as e:
             print(f"解析失败: {e}")
-            print(f"响应预览: {jsonp_response[:200]}...")
             return None
+        return None
     
-    def crawl_fund_holdings_by_year(self, fund_code, year, topline=10):
-        """爬取指定基金指定年份的持仓数据"""
-        url = f"{self.base_url}/FundArchivesDatas.aspx"
+    def get_fund_list(self):
+        """获取基金列表"""
+        print("📋 获取基金列表...")
+        url = "https://fund.eastmoney.com/data/rankhandler.aspx"
         params = {
-            'type': 'jjcc',
-            'code': fund_code,
-            'topline': topline,
-            'year': year
+            'op': 'ph', 'dt': 'kf', 'ft': 'gp', 'rs': '', 'gs': '0',
+            'sc': 'jn', 'st': 'desc', 'pi': '1', 'pn': '50', 'dx': '0'
         }
         
         try:
-            print(f"📡 请求 {fund_code} {year}年数据...")
             response = self.session.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            
             data = self.extract_json_from_jsonp(response.text)
+            
+            if data and 'datas' in data:
+                fund_list = data['datas'].split('|') if isinstance(data['datas'], str) else []
+                fund_codes = []
+                for item in fund_list:
+                    if '|' in item:
+                        parts = item.split('|')
+                        if len(parts) >= 1 and parts[0].isdigit() and len(parts[0]) == 6:
+                            fund_codes.append(parts[0])
+                print(f"✅ 获取到 {len(fund_codes)} 只基金")
+                return fund_codes[:5]  # 默认前5只
+        except Exception as e:
+            print(f"❌ 获取列表失败: {e}")
+        
+        # 默认基金列表
+        print("📋 使用默认基金列表")
+        return ['002580', '000689', '001298', '000001', '000002']
+    
+    def get_fund_name(self, fund_code):
+        """获取基金名称"""
+        url = f"https://fund.eastmoney.com/{fund_code}.html"
+        try:
+            response = self.session.get(url, timeout=10)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            name_elem = soup.select_one('h1') or soup.find('title')
+            if name_elem:
+                name = name_elem.get_text().strip()
+                # 清理标题中的多余文字
+                if ' - ' in name:
+                    name = name.split(' - ')[0]
+                return name
+        except:
+            pass
+        return f"基金{fund_code}"
+    
+    def crawl_year_holdings(self, fund_code, year):
+        """爬取单年持仓"""
+        url = "https://fundf10.eastmoney.com/FundArchivesDatas.aspx"
+        params = {'type': 'jjcc', 'code': fund_code, 'topline': '10', 'year': year}
+        
+        try:
+            response = self.session.get(url, params=params, timeout=10)
+            data = self.extract_json_from_jsonp(response.text)
+            
             if not data or 'content' not in data:
-                print(f"❌ 无 {fund_code} {year}年数据")
                 return []
             
             soup = BeautifulSoup(data['content'], 'html.parser')
             holdings = []
             
-            quarter_sections = soup.find_all('div', class_='box')
-            print(f"📊 找到 {len(quarter_sections)} 个季度")
-            
-            for i, section in enumerate(quarter_sections, 1):
-                title_elem = section.find('h4', class_='t')
-                if title_elem:
-                    title_text = title_elem.get_text().strip()
-                    quarter_match = re.search(r'(\d{4}年)(\d)季度', title_text)
-                    if quarter_match:
-                        year_str, quarter = quarter_match.groups()
-                        quarter = int(quarter)
-                    else:
-                        year_str = str(year)
-                        quarter = i
-                    report_date = title_elem.find('font', class_='px12').get_text().strip() if title_elem.find('font', class_='px12') else f"{year}-Q{quarter}"
-                else:
-                    year_str = str(year)
-                    quarter = i
-                    report_date = f"{year}-Q{quarter}"
+            # 查找所有季度
+            boxes = soup.find_all('div', class_='box')
+            for box in boxes:
+                # 提取季度信息
+                title = box.find('h4')
+                if not title:
+                    continue
                 
-                table = section.find('table', class_=re.compile(r'.*tzxq.*'))
+                title_text = title.get_text()
+                quarter_match = re.search(r'(\d{4}年)(\d)季度', title_text)
+                if not quarter_match:
+                    continue
+                
+                year_str, quarter = quarter_match.groups()
+                quarter = int(quarter)
+                
+                # 查找表格
+                table = box.find('table')
                 if not table:
                     continue
                 
-                rows = table.find('tbody').find_all('tr') if table.find('tbody') else table.find_all('tr')
-                
+                rows = table.find_all('tr')[1:]  # 跳过表头
                 for row in rows:
-                    cols = row.find_all(['td', 'th'])
+                    cols = row.find_all('td')
                     if len(cols) < 7:
                         continue
                     
+                    # 提取股票代码
                     code_link = cols[1].find('a')
                     stock_code = ''
-                    if code_link and 'href' in code_link.attrs:
-                        href = code_link['href']
+                    if code_link:
+                        href = code_link.get('href', '')
                         code_match = re.search(r'r/[\d.]+(\d+)', href)
                         if code_match:
                             stock_code = code_match.group(1)
                     
+                    if not stock_code or not stock_code.isdigit():
+                        continue
+                    
+                    # 提取数据
                     holding = {
                         'fund_code': fund_code,
                         'year': year_str,
                         'quarter': quarter,
-                        'report_date': report_date,
                         'stock_code': stock_code,
-                        'stock_name': cols[2].get_text().strip() if len(cols) > 2 else '',
-                        'ratio': cols[4].get_text().strip() if len(cols) > 4 else '',
-                        'shares': cols[5].get_text().strip() if len(cols) > 5 else '',
-                        'market_value': cols[6].get_text().strip().replace(',', '') if len(cols) > 6 else ''
+                        'stock_name': cols[2].get_text().strip(),
+                        'ratio': cols[4].get_text().strip(),
+                        'shares': cols[5].get_text().strip(),
+                        'market_value': cols[6].get_text().strip().replace(',', '')
                     }
                     
+                    # 数据清洗
                     if holding['ratio']:
-                        holding['ratio_clean'] = holding['ratio'].replace('%', '').strip()
+                        holding['ratio_clean'] = float(holding['ratio'].replace('%', ''))
                     if holding['market_value']:
-                        holding['market_value_clean'] = holding['market_value'].replace(',', '').strip()
+                        holding['market_value_clean'] = float(holding['market_value'])
                     if holding['shares']:
-                        holding['shares_clean'] = holding['shares'].strip()
+                        holding['shares_clean'] = float(holding['shares'])
                     
-                    if stock_code and stock_code.isdigit():
-                        holdings.append(holding)
+                    holdings.append(holding)
             
-            print(f"✅ {fund_code} {year}年: {len(holdings)} 条记录")
             return holdings
-            
         except Exception as e:
-            print(f"❌ {fund_code} {year}年失败: {e}")
+            print(f"❌ {fund_code}-{year}失败: {e}")
             return []
     
-    def crawl_fund_holdings(self, fund_code, years_back=1, topline=10):
-        """爬取近N年持仓（从2024年开始）"""
-        print(f"🚀 爬取 {fund_code} 近 {years_back} 年")
-        base_year = 2024  # 固定从2024开始
+    def crawl_fund(self, fund_code):
+        """爬取单只基金（默认2024年）"""
+        print(f"\n📈 正在爬取 {fund_code}...")
+        fund_name = self.get_fund_name(fund_code)
+        print(f"   基金名称: {fund_name}")
+        
+        # 尝试2024年，如果没有则尝试2023年
+        years_to_try = [2024, 2023]
         all_holdings = []
         
-        for year_offset in range(years_back):
-            year = base_year - year_offset
-            year_holdings = self.crawl_fund_holdings_by_year(fund_code, year, topline)
-            all_holdings.extend(year_holdings)
-            time.sleep(np.random.uniform(1, 2))
+        for year in years_to_try:
+            print(f"   📅 尝试{year}年数据...")
+            year_holdings = self.crawl_year_holdings(fund_code, year)
+            if year_holdings:
+                all_holdings.extend(year_holdings)
+                print(f"   ✅ {year}年获取 {len(year_holdings)} 条")
+                break  # 成功获取就停止
+            time.sleep(1)
         
-        if all_holdings:
-            df = pd.DataFrame(all_holdings)
-            numeric_cols = ['ratio_clean', 'shares_clean', 'market_value_clean']
-            for col in numeric_cols:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-            os.makedirs('data', exist_ok=True)
-            output_file = f"data/{fund_code}_holdings_{years_back}y.csv"
-            df.to_csv(output_file, index=False, encoding='utf-8-sig')
-            
-            print(f"💾 保存 {len(df)} 条到 {output_file}")
-            print(df[['year', 'quarter', 'stock_code', 'stock_name', 'ratio']].head(5).to_string(index=False))
-            return df
-        return pd.DataFrame()
-    
-    def get_fund_basic_info(self, fund_code):
-        """获取基金基本信息（修复编码）"""
-        url = f"https://fund.eastmoney.com/{fund_code}.html"
-        try:
-            response = self.session.get(url, timeout=10)
-            soup = BeautifulSoup(response.content, 'html.parser', from_encoding='utf-8')
-            
-            name_elem = soup.select_one('h1') or soup.find('title')
-            fund_name = name_elem.get_text().strip() if name_elem else 'Unknown'
-            
-            return {'fund_code': fund_code, 'fund_name': fund_name, 'fund_type': 'Unknown'}
-        except Exception as e:
-            print(f"⚠️ {fund_code} 信息失败: {e}")
-            return {'fund_code': fund_code, 'fund_name': 'Unknown', 'fund_type': 'Unknown'}
-    
-    def get_all_fund_codes(self, max_codes=5):
-        """获取基金列表（修复JSONP）"""
-        rank_url = "https://fund.eastmoney.com/data/rankhandler.aspx"
-        params = {
-            'op': 'ph', 'dt': 'kf', 'ft': 'gp', 'rs': '', 'gs': '0',
-            'sc': 'jn', 'st': 'desc', 'pi': '1', 'pn': str(max_codes * 2), 'dx': '0'
-        }
+        if not all_holdings:
+            print(f"   ❌ {fund_code} 无可用数据")
+            return pd.DataFrame()
         
-        try:
-            response = self.session.get(rank_url, params=params, timeout=10)
-            data = self.extract_json_from_jsonp(response.text)
-            
-            if data and 'datas' in data:
-                fund_list = data['datas'].split(',') if isinstance(data['datas'], str) else data['datas']
-                fund_codes = []
-                for item in fund_list:
-                    parts = re.split(r'[,|]', item)
-                    if len(parts) >= 2 and parts[0].isdigit() and len(parts[0]) == 6:
-                        fund_codes.append(parts[0])
-                print(f"✅ 获取 {len(fund_codes)} 只基金")
-                return fund_codes[:max_codes]
-        except Exception as e:
-            print(f"❌ 列表失败: {e}")
+        # 保存数据
+        df = pd.DataFrame(all_holdings)
+        df['fund_name'] = fund_name
         
-        return ['002580', '000689', '001298', '000001', '000002'][:max_codes]
+        os.makedirs('data', exist_ok=True)
+        filename = f"data/{fund_code}_{fund_name[:20]}_holdings.csv"
+        df.to_csv(filename, index=False, encoding='utf-8-sig')
+        
+        print(f"   💾 保存 {len(df)} 条到 {filename}")
+        print(f"   📊 前3条预览:")
+        preview_cols = ['year', 'quarter', 'stock_code', 'stock_name', 'ratio']
+        print(df[preview_cols].head(3).to_string(index=False))
+        
+        return df
 
 def main():
-    parser = argparse.ArgumentParser(description='基金持仓爬取')
-    parser.add_argument('--fund-code', type=str, default='002580')
-    parser.add_argument('--years', type=int, default=1)
-    parser.add_argument('--topline', type=int, default=10)
-    parser.add_argument('--all', action='store_true')
-    parser.add_argument('--max-codes', type=int, default=5)
+    """主函数 - 无参数直接运行"""
+    print("🚀 基金持仓爬取工具启动")
+    print("📅 默认配置: 前5只基金, 2024年数据, 每季度前10只持仓")
+    print("-" * 50)
     
-    args = parser.parse_args()
     crawler = FundHoldingsCrawler()
     
-    if args.all:
-        fund_codes = crawler.get_all_fund_codes(args.max_codes)
-        all_results = []
-        for i, code in enumerate(fund_codes, 1):
-            print(f"\n[ {i}/{len(fund_codes)} ] {code}")
-            info = crawler.get_fund_basic_info(code)
-            print(f"📄 {info['fund_name']}")
-            df = crawler.crawl_fund_holdings(code, args.years, args.topline)
-            if not df.empty:
-                df['fund_name'] = info['fund_name']
-                all_results.append(df)
-            time.sleep(np.random.uniform(2, 4))
+    # 获取基金列表
+    fund_codes = crawler.get_fund_list()
+    
+    # 爬取所有基金
+    all_data = []
+    success_count = 0
+    
+    for i, code in enumerate(fund_codes, 1):
+        print(f"\n[{i}/{len(fund_codes)}] {code}")
+        df = crawler.crawl_fund(code)
         
-        if all_results:
-            combined = pd.concat(all_results, ignore_index=True)
-            combined.to_csv(f"data/all_holdings_{args.years}y.csv", index=False, encoding='utf-8-sig')
-            print(f"\n🎉 总 {len(combined)} 条保存")
+        if not df.empty:
+            all_data.append(df)
+            success_count += 1
+        
+        # 延时防反爬
+        if i < len(fund_codes):
+            wait = np.random.uniform(2, 4)
+            print(f"   ⏳ 等待 {wait:.1f}秒...")
+            time.sleep(wait)
+    
+    # 生成汇总报告
+    if all_data:
+        combined = pd.concat(all_data, ignore_index=True)
+        summary_file = f"data/汇总_{datetime.now().strftime('%Y%m%d')}.csv"
+        combined.to_csv(summary_file, index=False, encoding='utf-8-sig')
+        
+        print(f"\n🎉 任务完成！")
+        print(f"✅ 成功: {success_count}/{len(fund_codes)} 只基金")
+        print(f"📊 总记录: {len(combined)} 条")
+        print(f"💾 汇总文件: {summary_file}")
+        
+        # 显示总体统计
+        print("\n📈 按基金统计:")
+        stats = combined.groupby('fund_code').agg({
+            'stock_code': 'count',
+            'ratio_clean': 'sum'
+        }).round(2)
+        stats.columns = ['持仓数量', '总占比']
+        print(stats.to_string())
     else:
-        crawler.crawl_fund_holdings(args.fund_code, args.years, args.topline)
+        print("\n❌ 没有获取到任何数据")
 
 if __name__ == "__main__":
     main()
