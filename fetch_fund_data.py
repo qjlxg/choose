@@ -1,86 +1,85 @@
 import scrapy
-import pandas as pd
-import json
 import re
+import json
 
-# 导入必要的Firebase Firestore模块
-from firebase_admin import credentials, firestore, initialize_app
-
-# 请确保你已经通过 `pip install firebase-admin pandas lxml html5lib` 安装了所有依赖库。
-
-# Firestore数据库初始化
-# 这里的__firebase_config和__app_id是来自Canvas环境的全局变量
-# 如果在本地测试，请替换为你的Firebase配置
-firebase_config = json.loads(__firebase_config)
-cred = credentials.Certificate(firebase_config)
-app = initialize_app(cred)
-db = firestore.client()
-
-class FundSpider(scrapy.Spider):
-    name = 'fund_spider'
-
-    # 基金代码、年份和季度列表，用于生成爬取任务
-    # 你可以根据需要修改这些列表
-    fund_list = ['017836', '020398', '000001']
-    years_to_scrape = [2023, 2024, 2025]
-    quarters_to_scrape = [1, 2, 3, 4]
+class FundHoldingsSpider(scrapy.Spider):
+    name = "fund_holdings_spider"
+    
+    # 基金代码，你可以根据需要修改
+    fund_code = "002580"
+    
+    # 爬取数据的年份范围
+    start_year = 2020  # 开始年份
+    end_year = 2025    # 结束年份
 
     def start_requests(self):
         """
-        生成所有基金、年份和季度的爬取请求。
+        生成初始请求。
+        这个方法会根据设定的年份范围，为每个年份的四个季度生成请求。
         """
-        for fund_code in self.fund_list:
-            for year in self.years_to_scrape:
-                for quarter in self.quarters_to_scrape:
-                    # 构造包含年份和季度的URL，以获取完整的持仓数据
-                    url = f'http://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={fund_code}&topline=10&year={year}&quarter={quarter}'
-                    
-                    # 附带元数据，以便在回调函数中识别
-                    yield scrapy.Request(url, self.parse, meta={'fund_code': fund_code, 'year': year, 'quarter': quarter})
+        # 定义季度的URL参数
+        quarters = {
+            1: "1",  # 一季度
+            2: "2",  # 二季度
+            3: "3",  # 三季度
+            4: "4"   # 四季度
+        }
+        
+        # 遍历年份和季度，生成请求URL
+        for year in range(self.start_year, self.end_year + 1):
+            for quarter in quarters.keys():
+                # 东方财富网站通常使用 year 和 quarter 参数来获取持仓数据
+                # 移除 topline 参数以获取所有持仓数据
+                url = f"http://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={self.fund_code}&year={year}&quarter={quarter}"
+                yield scrapy.Request(url=url, callback=self.parse, meta={'year': year, 'quarter': quarter})
 
     def parse(self, response):
         """
-        解析网页响应，提取基金持仓数据。
+        解析响应并提取数据。
+        这个方法会处理来自网站的 JSONP 格式响应，解析出股票持仓信息。
         """
-        fund_code = response.meta['fund_code']
         year = response.meta['year']
         quarter = response.meta['quarter']
-
+        
+        # 使用正则表达式从 JSONP 响应中提取 JSON 字符串
+        # 响应格式通常为 var apidata={ content:"...", ... }
         try:
-            # 网页内容是一个JavaScript变量，使用正则表达式提取
-            content_match = re.search(r'var apidata = { content:"(.*)"', response.text, re.S)
-            if not content_match:
-                self.log(f'ℹ️ 警告：未在响应中找到基金 {fund_code} 在 {year} 年第 {quarter} 季度的数据内容。')
+            json_str = re.search(r'content:"(.*)"', response.text).group(1)
+            # 对特殊字符进行转义，确保 JSON 解析成功
+            json_str = json_str.replace('\\"', '"').replace('\\/', '/')
+            
+            # 由于可能包含中文，需要处理编码问题
+            data = json.loads(json_str)
+
+            # 提取表格数据
+            table_data_html = data.get('content', '')
+            
+            # 使用 Scrapy 的选择器解析 HTML 表格
+            selector = scrapy.Selector(text=table_data_html)
+            rows = selector.css('tbody tr')
+            
+            if not rows:
+                self.logger.info(f"年份 {year} 第 {quarter} 季度没有持仓数据，URL: {response.url}")
                 return
 
-            html_content = content_match.group(1)
+            # 解析表格头
+            headers = [th.css('::text').get().strip() for th in selector.css('thead th')]
             
-            # 使用pandas的read_html函数解析HTML表格
-            # lxml和html5lib是可选的解析器，如果出现错误，请确保已安装
-            dfs = pd.read_html(html_content, parser='lxml')
-            
-            if dfs:
-                df = dfs[0]
-
-                # 数据清洗与重构
-                df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
-                df = df.iloc[:, 1:] # 移除"序号"列
-                df.insert(0, '基金代码', fund_code)
-                df.insert(1, '年份', year)
-                df.insert(2, '季度', quarter)
-
-                # 将数据转换为JSON格式
-                data_records = df.to_dict('records')
+            for row in rows:
+                item = {}
+                # 提取每一行的数据
+                values = [td.css('::text').get().strip() for td in row.css('td')]
                 
-                # 将数据保存到Firestore
-                collection_path = f'artifacts/{__app_id}/public/data/fund_holdings'
-                for record in data_records:
-                    doc_ref = db.collection(collection_path).add(record)
-                    self.log(f'💾 数据已保存到 Firestore: {doc_ref.id}')
+                # 将数据与表头对应起来
+                for i, header in enumerate(headers):
+                    if i < len(values):
+                        item[header] = values[i]
+                
+                # 添加年份和季度信息
+                item['年份'] = str(year)
+                item['季度'] = str(quarter)
+                
+                yield item
 
-                self.log(f'✅ 成功获取基金 {fund_code} 在 {year} 年第 {quarter} 季度的持仓数据，记录数：{len(df)}')
-            else:
-                self.log(f'ℹ️ 警告：未找到基金 {fund_code} 在 {year} 年第 {quarter} 季度的数据表格')
-
-        except Exception as e:
-            self.log(f'❌ 错误 - 基金 {fund_code}, 年份 {year}, 季度 {quarter}: {e}')
+        except (re.search, json.JSONDecodeError, IndexError) as e:
+            self.logger.error(f"解析响应时出错，URL: {response.url}, 错误: {e}")
