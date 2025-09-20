@@ -1,0 +1,45 @@
+name: Scrapy Fund Crawl
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'fund_earning_spider.py'
+      - '.github/workflows/**'
+  schedule:
+    # 每天凌晨 1 点运行
+    - cron: '0 1 * * *'
+  workflow_dispatch: # 添加这行来支持手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: 'true'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          # 安装项目依赖
+          pip install -r requirements.txt
+          
+      - name: Run Scrapy spider
+        run: |
+          # 运行 Scrapy 爬虫并将输出保存到 CSV 文件
+          mkdir -p fund_data
+          scrapy runspider fund_earning_spider.py -o fund_data/fund_ranking.csv
+
+      - name: Commit and push changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "feat: 更新Scrapy爬取的基金排名和持仓数据"
+          file_pattern: 'fund_data/*.csv'
