@@ -16,12 +16,20 @@ from datetime import datetime
 import re
 
 class FundDataCrawler:
-    def __init__(self):
+    def __init__(self, output_dir='fund_data'):
         self.session = requests.Session()
         self.ua = UserAgent()
+        self.output_dir = output_dir
         self.setup_session()
         self.setup_driver()
+        self.ensure_output_directory()
     
+    def ensure_output_directory(self):
+        """确保输出目录存在"""
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
+            print(f"已创建输出目录: {self.output_dir}")
+            
     def setup_session(self):
         """设置requests会话"""
         headers = {
@@ -90,7 +98,9 @@ class FundDataCrawler:
             print(f"成功获取 {len(df)} 只基金")
             
             # 保存到本地
-            df.to_csv('all_fund_list.csv', index=False, encoding='utf-8-sig')
+            output_path = os.path.join(self.output_dir, 'all_fund_list.csv')
+            df.to_csv(output_path, index=False, encoding='utf-8-sig')
+            print(f"基金列表已保存至: {output_path}")
             return df
             
         except Exception as e:
@@ -255,11 +265,12 @@ class FundDataCrawler:
             # 保存结果
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f'fund_holdings_{timestamp}.csv'
-            result_df.to_csv(filename, index=False, encoding='utf-8-sig')
+            output_path = os.path.join(self.output_dir, filename)
+            result_df.to_csv(output_path, index=False, encoding='utf-8-sig')
             
             print(f"\n批量爬取完成！")
             print(f"总共获取 {len(result_df)} 条持仓记录")
-            print(f"数据已保存至: {filename}")
+            print(f"数据已保存至: {output_path}")
             
             return result_df
         else:
