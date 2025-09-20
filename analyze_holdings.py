@@ -38,6 +38,16 @@ def analyze_holdings():
                 df = pd.read_csv(f, engine='python')
                 df.rename(columns={'占净值 比例': '占净值比例', '持仓市值 （万元）': '持仓市值'}, inplace=True)
                 
+                # 确保数值列的数据类型为数值型
+                numeric_columns = ['占净值比例', '持股数 （万股）', '持仓市值']
+                for col in numeric_columns:
+                    if col in df.columns:
+                        # 清理数据并转换为数值型
+                        df[col] = pd.to_numeric(df[col].astype(str).str.strip().str.replace('%', '').str.replace(',', ''), errors='coerce')
+                        # 将占净值比例转换为百分比（如果数据是小数形式则*100）
+                        if col == '占净值比例':
+                            df[col] = df[col] * 100
+                
                 if '最新价' in df.columns:
                     df = df.loc[:, ['序号', '股票代码', '股票名称', '相关资讯', '占净值比例', '持股数 （万股）', '持仓市值', '季度']]
                     
@@ -96,17 +106,27 @@ def analyze_holdings():
 
         sector_summary = combined_df.groupby(['年份', '板块'])['占净值比例'].sum().unstack().fillna(0)
         
-        # 在输出时才进行格式化
+        # 在输出时才进行格式化 - 修复数据类型问题
         report.append("#### 板块偏好（占净值比例之和）")
-        formatted_sector_summary = sector_summary.map(lambda x: f"{x:.2f}%" if x > 0 else "")
+        def format_percentage(x):
+            if pd.isna(x) or x == 0:
+                return ""
+            return f"{float(x):.2f}%"
+        
+        formatted_sector_summary = sector_summary.map(format_percentage)
         report.append(formatted_sector_summary.to_markdown())
 
         concentration_summary = combined_df.groupby('季度')['占净值比例'].sum()
         
-        # 在输出时才进行格式化
+        # 在输出时才进行格式化 - 修复数据类型问题
         report.append("\n#### 前十大持仓集中度（占净值比例之和）")
         formatted_concentration_summary = pd.DataFrame(concentration_summary)
-        formatted_concentration_summary['占净值比例'] = formatted_concentration_summary['占净值比例'].map(lambda x: f"{x:.2f}%")
+        def format_concentration(x):
+            if pd.isna(x):
+                return "0.00%"
+            return f"{float(x):.2f}%"
+        
+        formatted_concentration_summary['占净值比例'] = formatted_concentration_summary['占净值比例'].map(format_concentration)
         report.append(formatted_concentration_summary.to_markdown())
 
         # 3. 动态趋势总结和投资建议
@@ -132,8 +152,12 @@ def analyze_holdings():
             first_year_summary = sector_summary.iloc[0]
             last_year_summary = sector_summary.iloc[-1]
             
-            first_dominant_sector = first_year_summary.idxmax()
-            last_dominant_sector = last_year_summary.idxmax()
+            # 确保使用数值比较
+            first_year_numeric = first_year_summary.astype(float)
+            last_year_numeric = last_year_summary.astype(float)
+            
+            first_dominant_sector = first_year_numeric.idxmax()
+            last_dominant_sector = last_year_numeric.idxmax()
             
             if first_dominant_sector != last_dominant_sector:
                 report.append(f"- **板块偏好**：基金的投资偏好在分析期内发生了明显变化，从最初主要集中在**{first_dominant_sector}**转向了**{last_dominant_sector}**。这可能反映了基金经理对市场热点或宏观经济的最新判断。")
