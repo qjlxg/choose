@@ -3,19 +3,13 @@ import glob
 import os
 
 def analyze_holdings():
-    """
-    遍历 fund_data 目录，对每个基金代码的持仓数据进行合并和分析，
-    并将结果输出到 analysis_report.md 文件中。
-    """
     base_path = 'fund_data'
-    # 动态获取 fund_data 目录下的所有 CSV 文件
     all_files = glob.glob(os.path.join(base_path, "*.csv"))
 
     if not all_files:
         print("未在 'fund_data' 目录中找到任何 CSV 文件。")
         return
 
-    # 根据文件名中的基金代码分组
     fund_files = {}
     for f in all_files:
         try:
@@ -33,19 +27,13 @@ def analyze_holdings():
 
     report = []
 
-    # 逐个基金进行分析
     for fund_code, files in fund_files.items():
         df_list = []
         for f in files:
             try:
-                # 尝试读取文件，处理可能存在的额外列
                 df = pd.read_csv(f, engine='python')
-                
-                # 统一列名以确保合并成功
                 df.rename(columns={'占净值 比例': '占净值比例', '持仓市值 （万元）': '持仓市值'}, inplace=True)
                 
-                # 过滤掉 2025 年文件中的冗余列
-                # 这里假设 '最新价' 是一直存在的，如果未来有其他列，需要调整
                 if '最新价' in df.columns:
                     df = df.loc[:, ['序号', '股票代码', '股票名称', '相关资讯', '占净值比例', '持股数 （万股）', '持仓市值', '季度']]
                     
@@ -58,19 +46,14 @@ def analyze_holdings():
             continue
             
         combined_df = pd.concat(df_list, ignore_index=True)
-        
-        # 清理季度列，提取年份和季度信息
         combined_df['季度'] = combined_df['季度'].str.replace('年', '-Q')
         combined_df['年份'] = combined_df['季度'].str.split('-').str[0].astype(int)
         combined_df['季度编号'] = combined_df['季度'].str.split('-').str[1].str.replace('季度', '')
-        
-        # 按时间排序
         combined_df.sort_values(by=['年份', '季度编号'], inplace=True)
 
         report.append(f"## 基金代码: {fund_code} 持仓分析报告")
         report.append("---")
 
-        # 1. 重仓股变动分析
         report.append("### 1. 重仓股变动")
         quarters = combined_df['季度'].unique()
         for i in range(len(quarters) - 1):
@@ -91,7 +74,6 @@ def analyze_holdings():
                 removed_stocks = combined_df[(combined_df['季度'] == current_q) & (combined_df['股票代码'].isin(removed))]['股票名称'].tolist()
                 report.append(f"- **移除股票**：{', '.join(removed_stocks)}")
         
-        # 2. 行业偏好分析
         report.append("\n### 2. 行业偏好和持仓集中度")
         sector_mapping = {
             '688': '科创板',
@@ -112,12 +94,10 @@ def analyze_holdings():
         report.append("#### 板块偏好（占净值比例之和）")
         report.append(sector_summary.to_markdown())
 
-        # 3. 集中度分析
         concentration_summary = combined_df.groupby('季度')['占净值比例'].sum()
         report.append("\n#### 前十大持仓集中度（占净值比例之和）")
         report.append(concentration_summary.to_markdown())
 
-    # 将报告写入 Markdown 文件
     with open('analysis_report.md', 'w', encoding='utf-8') as f:
         f.write('\n'.join(report))
 
