@@ -36,4 +36,4 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "自动更新：基金持仓分析报告"
-          files: analysis_report.md
+          file_pattern: analysis_report.md
