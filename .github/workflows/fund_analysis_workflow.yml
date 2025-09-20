@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'analyze_holdings.py'
+      - '.github/workflows/fund_analysis_workflow.yml'
 
 jobs:
   analyze-and-report:
@@ -24,7 +27,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas
+          pip install pandas tabulate
 
       - name: Run analysis script
         run: python analyze_holdings.py
