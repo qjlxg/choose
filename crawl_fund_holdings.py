@@ -1,4 +1,5 @@
 import requests
+from lxml import etree
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -14,6 +15,8 @@ import re
 from fake_useragent import UserAgent
 import os
 from datetime import datetime
+import json
+import ast
 
 class FundDataCrawler:
     def __init__(self, output_dir='fund_data'):
@@ -34,12 +37,11 @@ class FundDataCrawler:
         """设置requests会话"""
         headers = {
             'User-Agent': self.ua.random,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.3',
             'Accept-Language': 'zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3',
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
-            'Referer': 'https://fundf10.eastmoney.com/',
         }
         self.session.headers.update(headers)
     
@@ -54,10 +56,10 @@ class FundDataCrawler:
         chrome_options.add_argument(f'--user-agent={self.ua.random}')
         
         try:
+            # 使用 webdriver-manager 自动下载并安装合适的 chromedriver
             service = Service(ChromeDriverManager().install())
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
             self.wait = WebDriverWait(self.driver, 10)
-            print("浏览器驱动初始化成功")
         except Exception as e:
             print(f"浏览器驱动初始化失败: {e}")
             self.driver = None
@@ -66,6 +68,49 @@ class FundDataCrawler:
         """关闭浏览器驱动"""
         if self.driver:
             self.driver.quit()
+    
+    def get_all_fund_codes(self):
+        """
+        爬取天天基金网所有基金代码和名称
+        返回: DataFrame格式的基金列表
+        """
+        url = "http://fund.eastmoney.com/allfund.html"
+        
+        try:
+            print("正在获取全市场基金列表...")
+            response = self.session.get(url, timeout=10)
+            response.raise_for_status()
+            
+            # 使用lxml解析
+            html = etree.HTML(response.text)
+            
+            # XPath获取基金代码和名称
+            fund_items = html.xpath('//*[@id="code_content"]/div/ul/li/div/a[1]/text()')
+            
+            fund_list = []
+            for item in fund_items:
+                # 提取6位基金代码
+                code_match = re.search(r'\((\d{6})\)', item)
+                if code_match:
+                    code = code_match.group(1)
+                    name = re.sub(r'^\(.*?）', '', item).strip()
+                    fund_list.append({
+                        'fund_code': code,
+                        'fund_name': name
+                    })
+            
+            df = pd.DataFrame(fund_list)
+            print(f"成功获取 {len(df)} 只基金")
+            
+            # 保存到本地
+            output_path = os.path.join(self.output_dir, 'all_fund_list.csv')
+            df.to_csv(output_path, index=False, encoding='utf-8-sig')
+            print(f"基金列表已保存至: {output_path}")
+            return df
+            
+        except Exception as e:
+            print(f"获取基金列表失败: {e}")
+            return pd.DataFrame()
     
     def get_fund_info(self, fund_code):
         """
@@ -139,513 +184,317 @@ class FundDataCrawler:
                     year_button.click()
                     time.sleep(3)
                 except Exception as e:
-                    print(f"    年份切换失败 {year}: {e}，尝试直接解析当前页面...")
-                    # 如果年份切换失败，继续解析当前页面
-                    pass
+                    print(f"年份切换失败 {year}: {e}")
+                    continue
                 
-                # 解析持仓表格 - 增强版解析逻辑
+                # 解析持仓表格
                 soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-                
-                # 尝试多种选择器找到持仓表格
-                table_selectors = [
-                    '#cctable > div > div',
-                    '.tablebg2',
-                    'table.comm',
-                    '#table',
-                    'table'
-                ]
-                
-                table = None
-                for selector in table_selectors:
-                    table = soup.select_one(selector)
-                    if table and table.find_all('tr'):
-                        break
+                table = soup.select_one('#cctable > div > div')
                 
                 if not table:
-                    print(f"    未找到基金 {fund_code} {year}年持仓表格")
-                    # 尝试查找任何包含股票数据的表格
-                    all_tables = soup.find_all('table')
-                    for t in all_tables:
-                        if t.find_all('tr') and len(t.find_all('tr')) > 1:
-                            table = t
-                            print(f"    使用备用表格选择器找到表格")
-                            break
-                    
-                    if not table:
-                        print(f"    所有表格选择器都失败")
-                        continue
+                    print(f"未找到基金 {fund_code} {year}年持仓表格")
+                    continue
                 
-                # 解析表格数据 - 智能解析
+                # 解析表格数据
                 rows = table.find_all('tr')[1:]  # 跳过表头
-                year_holdings = []
-                
-                for row_idx, row in enumerate(rows, 1):
+                for row in rows:
                     cols = row.find_all(['td', 'th'])
-                    if len(cols) >= 4:  # 至少需要序号、代码、名称、比例
-                        try:
-                            # 提取基本信息
-                            rank_text = cols[0].get_text().strip()
-                            rank = int(rank_text) if rank_text.isdigit() else row_idx
-                            
-                            # 提取股票代码（支持多种格式）
-                            stock_code = ''
-                            if len(cols) > 1:
-                                # 从链接中提取代码
-                                code_link = cols[1].find('a')
-                                if code_link and code_link.get('href'):
-                                    code_match = re.search(r'r/([.\d]+)', code_link.get('href'))
-                                    if code_match:
-                                        stock_code = code_match.group(1).replace('.', '')
-                                # 如果链接中没有，从文本提取
-                                if not stock_code:
-                                    stock_code = cols[1].get_text().strip()
-                            
-                            # 提取股票名称
-                            stock_name = ''
-                            if len(cols) > 2:
-                                name_elem = cols[2].find('a') or cols[2]
-                                stock_name = name_elem.get_text().strip()
-                            
-                            # 查找持仓比例（通常在第4列或更靠后的列）
-                            hold_ratio = ''
-                            hold_shares = ''
-                            hold_value = ''
-                            
-                            # 智能查找数值列
-                            for col_idx in range(3, len(cols)):
-                                col_text = cols[col_idx].get_text().strip()
-                                # 匹配持仓比例（包含%符号）
-                                if '%' in col_text and any(char.isdigit() for char in col_text):
-                                    hold_ratio = col_text.replace('%', '')
-                                # 匹配持股数（小数格式）
-                                elif '.' in col_text and col_text.replace('.', '').replace(',', '').isdigit():
-                                    if not hold_shares:
-                                        hold_shares = col_text.replace(',', '')
-                                    elif not hold_value:
-                                        hold_value = col_text.replace(',', '')
-                                # 匹配持仓市值（大数值）
-                                elif ',' in col_text and col_text.replace(',', '').replace('.', '').isdigit():
-                                    hold_value = col_text.replace(',', '')
-                            
-                            # 如果没找到持仓比例，尝试其他位置
-                            if not hold_ratio:
-                                for col_idx in range(3, len(cols)):
-                                    col_text = cols[col_idx].get_text().strip()
-                                    if '%' in col_text:
-                                        hold_ratio = col_text.replace('%', '')
-                                        break
-                            
-                            # 如果没找到持股数和市值，使用最后两列
-                            if not hold_shares and len(cols) >= 5:
-                                hold_shares = cols[-2].get_text().strip().replace(',', '')
-                            if not hold_value and len(cols) >= 6:
-                                hold_value = cols[-1].get_text().strip().replace(',', '')
-                            
-                            holding = {
-                                'fund_code': fund_code,
-                                'year': year,
-                                'quarter': '未知',  # Selenium页面通常不显示具体季度
-                                'rank': rank,
-                                'stock_code': stock_code,
-                                'stock_name': stock_name,
-                                'hold_ratio': hold_ratio,
-                                'hold_shares': hold_shares,
-                                'hold_value': hold_value,
-                                'method': 'selenium'
-                            }
-                            
-                            # 验证数据完整性
-                            if stock_code and stock_name and hold_ratio:
-                                year_holdings.append(holding)
-                            
-                        except Exception as row_error:
-                            print(f"    解析第 {row_idx} 行失败: {row_error}")
-                            continue
+                    if len(cols) >= 7:
+                        holding = {
+                            'fund_code': fund_code,
+                            'year': year,
+                            'stock_code': cols[1].text.strip() if cols[1].text.strip() else '',
+                            'stock_name': cols[2].text.strip(),
+                            'hold_ratio': cols[3].text.strip(),
+                            'hold_value': cols[4].text.strip(),
+                            'stock_price': cols[5].text.strip(),
+                            'hold_shares': cols[6].text.strip(),
+                        }
+                        all_holdings.append(holding)
                 
-                all_holdings.extend(year_holdings)
-                print(f"    基金 {fund_code} {year}年获取到 {len(year_holdings)} 条有效持仓记录")
+                print(f"基金 {fund_code} {year}年获取到 {len(rows)} 条持仓记录")
                 time.sleep(1)  # 避免请求过快
                 
             except Exception as e:
-                print(f"    爬取基金 {fund_code} {year}年持仓失败: {e}")
+                print(f"爬取基金 {fund_code} {year}年持仓失败: {e}")
                 continue
         
         # 转换为DataFrame
         if all_holdings:
             df = pd.DataFrame(all_holdings)
             # 数据清洗
+            df['hold_ratio'] = pd.to_numeric(df['hold_ratio'].str.replace('%', ''), errors='coerce')
+            df['hold_value'] = pd.to_numeric(df['hold_value'].str.replace(',', ''), errors='coerce')
+            df['stock_price'] = pd.to_numeric(df['stock_price'], errors='coerce')
+            df['hold_shares'] = pd.to_numeric(df['hold_shares'].str.replace(',', ''), errors='coerce')
+            return df
+        else:
+            return pd.DataFrame()
+
+    def get_fund_holdings_from_api(self, fund_code, years=None):
+        """
+        通过新的API链接爬取基金持仓数据
+        """
+        if years is None:
+            years = [datetime.now().year]
+        
+        all_holdings = []
+        
+        for year in years:
+            try:
+                print(f"正在通过API爬取基金 {fund_code} {year}年持仓...")
+                
+                # 构建API链接
+                url = f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={fund_code}&topline=10&year={year}"
+                response = self.session.get(url, timeout=10)
+                response.raise_for_status()
+                
+                # 提取完整的 JavaScript 对象字符串
+                match = re.search(r'var apidata=(.*?);', response.text, re.DOTALL)
+                if not match:
+                    print(f"未在响应中找到基金 {fund_code} {year}年的数据")
+                    continue
+                
+                api_data_str = match.group(1).strip()
+                
+                # 寻找并提取 content 字符串，这是格式最复杂的部分
+                content_match = re.search(r'content:"(.*)"(?:,\s*arryear:)', api_data_str, re.DOTALL)
+                
+                api_data = {}
+                if content_match:
+                    content_value = content_match.group(1)
+                    # 将 content 值从主字符串中移除，以避免解析错误
+                    rest_of_data_str = (
+                        api_data_str[:content_match.start(1)-9] + 
+                        api_data_str[content_match.end(1)+1:]
+                    )
+                    
+                    # 修复其余部分的语法并进行解析
+                    fixed_rest_of_data_str = (
+                        rest_of_data_str
+                        .replace('arryear:', '"arryear":')
+                        .replace('curyear:', '"curyear":')
+                        .replace('true', 'True')
+                        .replace('false', 'False')
+                        .replace('null', 'None')
+                    )
+                    api_data = ast.literal_eval(fixed_rest_of_data_str)
+                    api_data['content'] = content_value
+                else:
+                    # 如果没有找到 content 字段，使用更简单的替换方法
+                    fixed_api_data_str = (
+                        api_data_str
+                        .replace('content:', '"content":')
+                        .replace('arryear:', '"arryear":')
+                        .replace('curyear:', '"curyear":')
+                        .replace('true', 'True')
+                        .replace('false', 'False')
+                        .replace('null', 'None')
+                    )
+                    api_data = ast.literal_eval(fixed_api_data_str)
+                
+                content = api_data.get('content', '')
+                
+                # 使用 BeautifulSoup 解析 HTML 内容
+                soup = BeautifulSoup(content, 'html.parser')
+                
+                # 找到所有的表格
+                tables = soup.find_all('table', {'class': ['w780', 'w782']})
+                
+                if not tables:
+                    print(f"未找到基金 {fund_code} {year}年持仓表格")
+                    continue
+                
+                total_rows = 0
+                for table in tables:
+                    # 获取季度信息
+                    quarter_info_elem = table.find_previous_sibling('h4')
+                    quarter_info = quarter_info_elem.text.strip().split('  ')[0].strip() if quarter_info_elem else f"{year}年未知季度"
+                    
+                    # 遍历表格中的每一行
+                    rows = table.find_all('tr')[1:] # 跳过表头
+                    for row in rows:
+                        cols = row.find_all(['td'])
+                        if len(cols) >= 6:
+                            holding = {
+                                'fund_code': fund_code,
+                                'year': year,
+                                'quarter': quarter_info,
+                                'stock_code': cols[1].text.strip(),
+                                'stock_name': cols[2].text.strip(),
+                                'hold_ratio': cols[4].text.strip().replace('%', ''),
+                                'hold_shares': cols[5].text.strip().replace(',', ''),
+                                'hold_value': cols[6].text.strip().replace(',', '')
+                            }
+                            all_holdings.append(holding)
+                    total_rows += len(rows)
+                
+                print(f"基金 {fund_code} {year}年获取到 {total_rows} 条持仓记录")
+
+            except Exception as e:
+                print(f"爬取基金 {fund_code} {year}年持仓失败: {e}")
+                continue
+        
+        if all_holdings:
+            df = pd.DataFrame(all_holdings)
+            # 数据清洗
             df['hold_ratio'] = pd.to_numeric(df['hold_ratio'], errors='coerce')
             df['hold_value'] = pd.to_numeric(df['hold_value'], errors='coerce')
             df['hold_shares'] = pd.to_numeric(df['hold_shares'], errors='coerce')
-            
-            # 数据质量检查
-            valid_records = df[df['hold_ratio'].notna()]
-            print(f"    总数据质量: {len(valid_records)}/{len(df)} 条有效记录")
-            
-            return valid_records
+            return df
         else:
-            print(f"    基金 {fund_code} 未获取到有效数据")
             return pd.DataFrame()
-    
-    def test_selenium_parsing(self, fund_code='014192', year=2025):
-        """
-        测试Selenium解析功能
-        """
-        print(f"\n🧪 测试Selenium解析 - 基金 {fund_code} {year}年")
-        
-        holdings = self.get_fund_holdings(fund_code, years=[year])
-        
-        if not holdings.empty:
-            print(f"✅ Selenium方法成功! 获取 {len(holdings)} 条记录")
-            print("\n前5条记录:")
-            display_cols = ['year', 'rank', 'stock_code', 'stock_name', 'hold_ratio', 'hold_shares', 'hold_value']
-            print(holdings[display_cols].head().to_string(index=False))
-            
-            # 简单统计
-            print(f"\n📊 快速统计:")
-            print(f"   总持仓比例: {holdings['hold_ratio'].sum():.2f}%")
-            print(f"   总持仓市值: {holdings['hold_value'].sum():,.2f}万元")
-            print(f"   平均单股比例: {holdings['hold_ratio'].mean():.2f}%")
-        else:
-            print("❌ Selenium方法失败")
-            print("💡 检查: 1.网络连接 2.基金代码是否正确 3.ChromeDriver版本")
     
     def batch_crawl_fund_holdings(self, fund_list, max_funds=100, years=None):
         """
-        批量爬取基金持仓数据 - 纯Selenium版本，只针对报告中的弱买入和强买入基金
+        批量爬取基金持仓数据
         """
         if years is None:
-            years = [datetime.now().year, datetime.now().year-1, datetime.now().year-2]
+            years = [datetime.now().year]
         
         all_data = []
-        failed_funds = []
-        successful_funds = []
-        
-        print(f"\n🔄 开始批量爬取 {min(max_funds, len(fund_list))} 只基金 (Selenium方法，仅弱买入/强买入基金)")
-        print(f"   爬取年份: {', '.join(map(str, years))}")
         
         for idx, fund in fund_list.iterrows():
             if idx >= max_funds:
                 break
                 
             fund_code = fund['fund_code']
-            fund_name = fund.get('fund_name', f'基金{fund_code}')
-            print(f"\n[{idx+1}/{min(max_funds, len(fund_list))}] 正在处理: {fund_name} ({fund_code})")
+            print(f"\n[{idx+1}/{min(max_funds, len(fund_list))}] 正在处理: {fund['fund_name']} ({fund_code})")
             
             # 获取基金基本信息
-            print(f"    获取基金基本信息...")
             fund_info = self.get_fund_info(fund_code)
-            full_fund_name = fund_info.get('fund_name', fund_name)
-            company = fund_info.get('company', '未知')
-            print(f"    基金名称: {full_fund_name}")
-            print(f"    管理公司: {company}")
             
-            # 使用Selenium获取持仓数据
-            print(f"    开始爬取持仓数据...")
-            holdings = self.get_fund_holdings(fund_code, years)
+            # === 使用新的API方法获取持仓数据 ===
+            holdings = self.get_fund_holdings_from_api(fund_code, years)
             
             if not holdings.empty:
                 # 合并基本信息和持仓数据
-                holdings['fund_name'] = full_fund_name
+                holdings['fund_name'] = fund_info.get('fund_name', fund['fund_name'])
                 holdings['manager'] = fund_info.get('manager', '')
-                holdings['company'] = company
+                holdings['company'] = fund_info.get('company', '')
                 all_data.append(holdings)
-                successful_funds.append(fund_code)
-                print(f"    ✓ 成功获取 {len(holdings)} 条记录")
-                print(f"      - 覆盖年份: {sorted(holdings['year'].unique())}")
-                print(f"      - 总持仓市值: {holdings['hold_value'].sum():,.2f}万元")
-            else:
-                failed_funds.append(fund_code)
-                print(f"    ✗ 获取失败 - 无有效持仓数据")
             
             # 避免请求过快
-            print(f"    等待3秒后继续...")
-            time.sleep(3)
+            time.sleep(2)
         
         # 合并所有数据
         if all_data:
             result_df = pd.concat(all_data, ignore_index=True)
             
-            # 数据质量检查
-            print(f"\n📊 批量爬取完成统计:")
-            print(f"   成功基金: {len(successful_funds)} 只")
-            print(f"   失败基金: {len(failed_funds)} 只")
-            print(f"   总记录数: {len(result_df):,}")
-            print(f"   涉及股票: {result_df['stock_name'].nunique()}")
-            
-            if len(result_df) > 0:
-                print(f"   平均持仓比例: {result_df['hold_ratio'].mean():.2f}%")
-                print(f"   总持仓市值: {result_df['hold_value'].sum():,.2f}万元")
-                print(f"   数据年份分布: {result_df['year'].value_counts().sort_index().to_dict()}")
-            
             # 保存结果
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'fund_holdings_report_{timestamp}.csv'
+            filename = f'fund_holdings_{timestamp}.csv'
             output_path = os.path.join(self.output_dir, filename)
             result_df.to_csv(output_path, index=False, encoding='utf-8-sig')
             
-            # 保存成功基金列表
-            success_file = os.path.join(self.output_dir, f'successful_funds_report_{timestamp}.txt')
-            with open(success_file, 'w', encoding='utf-8') as f:
-                f.write(f"报告基金成功爬取列表 ({len(successful_funds)} 只)\n")
-                f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write("="*50 + "\n")
-                for code in successful_funds:
-                    fund_info = self.get_fund_info(code)
-                    name = fund_info.get('fund_name', '未知')
-                    f.write(f"{code}\t{name}\n")
-            
-            # 保存失败基金列表
-            if failed_funds:
-                failed_file = os.path.join(self.output_dir, f'failed_funds_report_{timestamp}.txt')
-                with open(failed_file, 'w', encoding='utf-8') as f:
-                    f.write(f"报告基金失败爬取列表 ({len(failed_funds)} 只)\n")
-                    f.write(f"可能原因: 1.基金无持仓数据 2.网络问题 3.页面结构变化\n")
-                    f.write("="*50 + "\n")
-                    for code in failed_funds:
-                        f.write(f"{code}\n")
-                print(f"   失败基金列表已保存至: {failed_file}")
-            
-            print(f"\n💾 主数据文件已保存至: {output_path}")
-            print(f"   成功基金列表已保存至: {success_file}")
+            print(f"\n批量爬取完成！")
+            print(f"总共获取 {len(result_df)} 条持仓记录")
+            print(f"数据已保存至: {output_path}")
             
             return result_df
         else:
-            print("❌ 未获取到任何数据")
-            print("💡 建议: 检查网络连接、ChromeDriver版本、目标基金代码")
+            print("未获取到任何数据")
             return pd.DataFrame()
     
     def analyze_holdings(self, holdings_df):
         """
-        分析持仓数据 - 增强版
+        分析持仓数据
         """
         if holdings_df.empty:
-            print("❌ 没有数据可分析")
+            print("没有数据可分析")
             return
         
-        print("\n" + "="*80)
-        print("                    基金持仓数据分析报告 (报告基金专用)")
-        print("="*80)
+        print("\n=== 持仓数据分析 ===")
         
-        # 1. 基本统计
-        print(f"\n📊 基本统计信息:")
-        print(f"   总记录数: {len(holdings_df):,}")
-        print(f"   涉及基金数: {holdings_df['fund_code'].nunique()}")
-        print(f"   涉及股票数: {holdings_df['stock_name'].nunique()}")
-        print(f"   数据年份范围: {holdings_df['year'].min()}-{holdings_df['year'].max()}")
+        # 1. 按基金类型统计
+        print("\n1. 各基金公司持仓股票数量统计:")
+        company_stats = holdings_df.groupby('company').agg({
+            'stock_name': 'nunique',
+            'hold_value': 'sum'
+        }).round(2)
+        company_stats.columns = ['持仓股票数', '总持仓市值']
+        print(company_stats.sort_values('总持仓市值', ascending=False).head(10))
         
-        year_dist = holdings_df['year'].value_counts().sort_index()
-        print(f"   年份分布: {dict(year_dist)}")
-        
-        # 2. 按基金公司统计
-        if 'company' in holdings_df.columns and holdings_df['company'].notna().any():
-            print(f"\n🏢 各基金公司持仓概览 (Top 5):")
-            company_stats = holdings_df.groupby('company').agg({
-                'stock_name': 'nunique',
-                'hold_value': 'sum',
-                'fund_code': 'nunique'
-            }).round(2)
-            company_stats.columns = ['持仓股票数', '总持仓市值(万元)', '管理基金数']
-            company_stats = company_stats.sort_values('总持仓市值(万元)', ascending=False).head(5)
-            print(company_stats.to_string())
-        else:
-            print(f"\n🏢 基金公司信息: 部分基金信息获取失败")
-        
-        # 3. 热门股票统计
-        print(f"\n🔥 热门持仓股票 Top 10:")
+        # 2. 热门股票统计
+        print("\n2. 热门持仓股票 Top 10:")
         hot_stocks = holdings_df.groupby('stock_name').agg({
             'fund_code': 'nunique',
             'hold_value': 'sum'
         }).round(2)
-        hot_stocks.columns = ['持有基金数', '总持仓市值(万元)']
-        hot_stocks = hot_stocks.sort_values('总持仓市值(万元)', ascending=False).head(10)
-        print(hot_stocks.to_string())
+        hot_stocks.columns = ['持有基金数', '总持仓市值']
+        print(hot_stocks.sort_values('总持仓市值', ascending=False).head(10))
         
-        # 4. 持仓集中度分析
-        print(f"\n🎯 持仓集中度分析 (Top 5):")
+        # 3. 持仓集中度分析
+        print("\n3. 各基金持仓集中度分析:")
         concentration = holdings_df.groupby('fund_code').apply(
-            lambda x: x['hold_ratio'].sum() if not x.empty else 0
-        ).sort_values(ascending=False).head(5)
-        
-        for fund_code, conc in concentration.items():
-            fund_name = holdings_df[holdings_df['fund_code'] == fund_code]['fund_name'].iloc[0] if 'fund_name' in holdings_df.columns else f'基金{fund_code}'
-            record_count = len(holdings_df[holdings_df['fund_code'] == fund_code])
-            print(f"   {fund_name} ({fund_code}): {conc:.1f}% ({record_count}条记录)")
-        
-        print(f"   平均集中度: {concentration.mean():.1f}%")
-        
-        # 5. 市场分布分析
-        if 'stock_code' in holdings_df.columns:
-            print(f"\n📈 股票市场分布:")
-            def classify_stock(code):
-                if pd.isna(code) or not str(code):
-                    return '未知'
-                code_str = re.sub(r'^[0-9.]+\.', '', str(code)).zfill(6)  # 清理前缀并补齐6位
-                if code_str.startswith('002'):
-                    return '中小板'
-                elif code_str.startswith('300'):
-                    return '创业板'
-                elif code_str.startswith('60') or code_str.startswith('688'):
-                    return '主板'
-                elif code_str.startswith('00') or code_str.startswith('399'):
-                    return '指数'
-                else:
-                    return '其他'
-            
-            holdings_df['market'] = holdings_df['stock_code'].apply(classify_stock)
-            
-            market_dist = holdings_df.groupby('market').agg({
-                'hold_value': 'sum',
-                'stock_name': 'nunique'
-            }).round(2)
-            market_dist.columns = ['总持仓市值(万元)', '股票数']
-            if len(market_dist) > 0:
-                market_dist['占比'] = (market_dist['总持仓市值(万元)'] / market_dist['总持仓市值(万元)'].sum() * 100).round(1)
-                print(market_dist.sort_values('总持仓市值(万元)', ascending=False).to_string())
-        
-        # 6. 数据质量报告
-        print(f"\n🔍 数据质量报告:")
-        null_ratios = {
-            'hold_ratio': holdings_df['hold_ratio'].isna().sum(),
-            'hold_value': holdings_df['hold_value'].isna().sum(),
-            'stock_code': holdings_df['stock_code'].isna().sum(),
-            'stock_name': holdings_df['stock_name'].isna().sum()
-        }
-        print(f"   空值统计: {null_ratios}")
-        print(f"   完整记录率: {(len(holdings_df) - sum(null_ratios.values())) / len(holdings_df) * 100:.1f}%")
+            lambda x: x['hold_ratio'].sum()
+        ).sort_values(ascending=False)
+        print(f"最高集中度基金: {concentration.index[0]} (集中度: {concentration.iloc[0]:.1f}%)")
+        print(f"平均集中度: {concentration.mean():.1f}%")
 
 def get_fund_codes_from_report(file_path):
     """
-    从市场监控报告中读取"弱买入"和"强买入"的基金代码。
+    从市场监控报告中读取“弱买入”和“强买入”的基金代码。
     """
     fund_codes = []
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
-            # 使用正则表达式匹配"弱买入"或"强买入"行
+            # 使用正则表达式匹配“弱买入”或“强买入”行
             pattern = re.compile(r'\|\s*(\d{6})\s*\|.*?\s*\|\s*(弱买入|强买入)\s*\|')
             matches = pattern.findall(content)
             for code, signal in matches:
                 # 确保每个代码只添加一次
                 if code not in fund_codes:
                     fund_codes.append(code)
-        print(f"✅ 从报告中获取到 {len(fund_codes)} 个待爬取的基金代码（弱买入/强买入）。")
-        if fund_codes:
-            print(f"   示例: {fund_codes[:5]}...")
+        print(f"从报告中获取到 {len(fund_codes)} 个待爬取的基金代码。")
     except FileNotFoundError:
-        print(f"❌ 错误: 未找到文件 {file_path}")
-        # 提供默认测试基金代码
-        print("   使用默认测试基金代码: 014192, 005959")
-        return ['014192', '005959']
+        print(f"错误: 未找到文件 {file_path}")
+        return []
     except Exception as e:
-        print(f"❌ 读取文件时出错: {e}")
-        return ['014192', '005959']  # 默认测试代码
+        print(f"读取文件时出错: {e}")
+        return []
     
     return fund_codes
 
 def main():
-    """主程序 - 纯Selenium版本，仅报告基金"""
+    """主程序"""
     crawler = FundDataCrawler()
     
     try:
-        print("🚀 启动基金持仓数据爬取系统 (Selenium版，仅弱买入/强买入基金)")
-        print("=" * 60)
-        
-        # === 测试模式（推荐先运行测试） ===
-        print("\n🧪 运行单基金测试...")
-        crawler.test_selenium_parsing('014192', 2025)
-        
-        # 如果测试失败，程序提前结束
-        # return
-        
-        # 步骤1: 从报告文件中获取基金列表（仅弱买入/强买入）
-        print(f"\n📋 步骤1: 从报告中读取弱买入/强买入基金列表")
+        # 步骤1: 从报告文件中获取基金列表
+        print("=== 步骤1: 从报告中读取基金列表 ===")
         report_file = 'market_monitor_report.md'
         codes_to_crawl = get_fund_codes_from_report(report_file)
         
         if not codes_to_crawl:
-            print("❌ 未找到需要爬取的基金代码，使用默认测试基金")
-            fund_list_df = pd.DataFrame({
-                'fund_code': ['014192', '005959'], 
-                'fund_name': ['广发先进制造股票发起式C', '前海开源沪深300指数']
-            })
-        else:
-            # 将代码列表转换为DataFrame格式以适应原有函数
-            fund_list_df = pd.DataFrame({'fund_code': codes_to_crawl, 'fund_name': ''})
+            print("未找到需要爬取的基金代码，程序退出")
+            return
         
-        print(f"📈 准备处理 {len(fund_list_df)} 只基金（仅弱买入/强买入）")
+        # 将代码列表转换为DataFrame格式以适应原有函数
+        fund_list_df = pd.DataFrame({'fund_code': codes_to_crawl, 'fund_name': ''})
         
         # 步骤2: 批量爬取持仓数据
-        print(f"\n🔍 步骤2: 批量爬取持仓数据")
-        years_to_crawl = [2025, 2024, 2023]  # 当前日期2025-09-20，爬取近三年
-        
+        print("\n=== 步骤2: 批量爬取持仓数据 ===")
+        years_to_crawl = [2025, 2024, 2023]  # 指定爬取年份，爬取近三年数据
         holdings_data = crawler.batch_crawl_fund_holdings(
             fund_list_df, 
-            max_funds=len(fund_list_df),
+            max_funds=len(codes_to_crawl),
             years=years_to_crawl
         )
         
         # 步骤3: 数据分析
         if not holdings_data.empty:
-            print(f"\n📊 步骤3: 数据分析")
+            print("\n=== 步骤3: 数据分析 ===")
             crawler.analyze_holdings(holdings_data)
-        else:
-            print("❌ 未获取到任何持仓数据")
-            print("💡 可能原因:")
-            print("   1. 网络连接问题")
-            print("   2. ChromeDriver版本不匹配")
-            print("   3. 目标基金无公开持仓数据")
-            print("   4. 网站页面结构发生变化")
         
     except KeyboardInterrupt:
-        print("\n⚠️  用户中断程序")
+        print("\n用户中断程序")
     except Exception as e:
-        print(f"❌ 程序执行出错: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"程序执行出错: {e}")
     finally:
         crawler.close_driver()
-        print("\n👋 程序结束，感谢使用！")
-
-def quick_test():
-    """快速测试函数 - 纯Selenium版"""
-    print("🧪 快速测试 - 单个基金 (Selenium)")
-    crawler = FundDataCrawler()
-    
-    # 测试单个基金
-    fund_code = '014192'
-    year = 2025
-    print(f"测试基金: {fund_code} ({year}年)")
-    
-    holdings = crawler.get_fund_holdings(fund_code, years=[year])
-    
-    if not holdings.empty:
-        print(f"✅ 测试成功! 获取 {len(holdings)} 条记录")
-        print("\n前5条持仓:")
-        display_cols = ['year', 'rank', 'stock_code', 'stock_name', 'hold_ratio', 'hold_shares', 'hold_value']
-        print(holdings[display_cols].head().to_string(index=False))
-        
-        # 简单分析
-        print(f"\n📈 快速分析:")
-        print(f"   总持仓比例: {holdings['hold_ratio'].sum():.2f}%")
-        print(f"   总持仓市值: {holdings['hold_value'].sum():,.2f}万元")
-        print(f"   Top3持仓:")
-        top3 = holdings.nlargest(3, 'hold_value')[['stock_name', 'hold_ratio', 'hold_value']]
-        for _, row in top3.iterrows():
-            print(f"     {row['stock_name']}: {row['hold_ratio']:.1f}% ({row['hold_value']:,.0f}万元)")
-    else:
-        print("❌ 测试失败")
-        print("💡 故障排除:")
-        print("   1. 检查网络连接")
-        print("   2. 确认Chrome浏览器已安装")
-        print("   3. 运行: pip install --upgrade webdriver-manager")
-        print("   4. 检查防火墙设置")
-    
-    crawler.close_driver()
+        print("程序结束")
 
 if __name__ == "__main__":
-    # 运行快速测试
-    # quick_test()
-    
-    # 运行主程序
     main()
