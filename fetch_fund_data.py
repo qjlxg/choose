@@ -3,6 +3,7 @@ import requests
 from datetime import datetime
 import os
 import time
+from io import StringIO
 
 def fetch_fund_holdings(fund_code, year):
     """
@@ -17,7 +18,8 @@ def fetch_fund_holdings(fund_code, year):
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         
-        tables = pd.read_html(response.text, encoding='utf-8')
+        # 使用 StringIO 包装字符串，以消除 FutureWaring
+        tables = pd.read_html(StringIO(response.text), encoding='utf-8')
         if tables:
             holdings_table = tables[0]
             print(f"✅ 成功获取基金 {fund_code} 在 {year} 年的持仓数据。")
@@ -36,25 +38,31 @@ def main():
     today_date = datetime.now().strftime('%Y%m%d')
     input_csv_path = f'data/买入信号基金_{today_date}.csv'
     
+    print(f"🚀 正在检查输入文件路径: {input_csv_path}")
+    
     if not os.path.exists(input_csv_path):
         print(f"❌ 输入文件 {input_csv_path} 不存在。")
         return
+    else:
+        print(f"✅ 找到输入文件：{input_csv_path}")
         
     output_dir = 'fund_data'
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
+        print(f"✅ 创建输出目录: {output_dir}")
         
     try:
         df = pd.read_csv(input_csv_path)
         fund_codes = df['fund_code'].unique()
+        print(f"✅ 成功读取到 {len(fund_codes)} 个基金代码。")
     except Exception as e:
         print(f"❌ 读取 CSV 文件时出错：{e}")
         return
 
-    # 抓取 2023, 2024, 2025 年的数据
     years_to_fetch = [2023, 2024, 2025]
     for code in fund_codes:
         for year in years_to_fetch:
+            print(f"----------------------------------------")
             print(f"🔍 正在处理基金代码: {code}，年份: {year}")
             holdings_df = fetch_fund_holdings(str(code).zfill(6), year)
             
@@ -63,9 +71,9 @@ def main():
                 holdings_df.to_csv(output_path, index=False, encoding='utf-8-sig')
                 print(f"✅ 持仓数据已保存至 {output_path}")
             
-            # 增加延迟以避免对网站造成压力
             time.sleep(2)
-            
+        
+    print(f"----------------------------------------")
     print(f"✅ 所有基金和年份处理完毕。")
 
 if __name__ == "__main__":
