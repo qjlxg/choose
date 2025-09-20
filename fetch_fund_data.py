@@ -1,93 +1,86 @@
-# -*- coding: utf-8 -*-
 import scrapy
 import pandas as pd
+import json
 import re
-import os
+
+# 导入必要的Firebase Firestore模块
+from firebase_admin import credentials, firestore, initialize_app
+
+# 请确保你已经通过 `pip install firebase-admin pandas lxml html5lib` 安装了所有依赖库。
+
+# Firestore数据库初始化
+# 这里的__firebase_config和__app_id是来自Canvas环境的全局变量
+# 如果在本地测试，请替换为你的Firebase配置
+firebase_config = json.loads(__firebase_config)
+cred = credentials.Certificate(firebase_config)
+app = initialize_app(cred)
+db = firestore.client()
 
 class FundSpider(scrapy.Spider):
-    name = 'fund_earning'
+    name = 'fund_spider'
 
-    start_urls = [
-        'http://fund.eastmoney.com/data/fundranking.html#tall;cgt;r;zsd;p;st;r;tt;1;;2;20'
-    ]
+    # 基金代码、年份和季度列表，用于生成爬取任务
+    # 你可以根据需要修改这些列表
+    fund_list = ['017836', '020398', '000001']
+    years_to_scrape = [2023, 2024, 2025]
+    quarters_to_scrape = [1, 2, 3, 4]
 
-    # 基金代码和年份的列表，可以根据需要自定义
-    # 示例: [(基金代码, 年份)]
-    funds_to_scrape = [
-        ('017836', 2025),
-        ('020398', 2023),
-        ('020398', 2024),
-        ('020398', 2025),
-        ('017836', 2024),
-        ('017836', 2023)
-    ]
+    def start_requests(self):
+        """
+        生成所有基金、年份和季度的爬取请求。
+        """
+        for fund_code in self.fund_list:
+            for year in self.years_to_scrape:
+                for quarter in self.quarters_to_scrape:
+                    # 构造包含年份和季度的URL，以获取完整的持仓数据
+                    url = f'http://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={fund_code}&topline=10&year={year}&quarter={quarter}'
+                    
+                    # 附带元数据，以便在回调函数中识别
+                    yield scrapy.Request(url, self.parse, meta={'fund_code': fund_code, 'year': year, 'quarter': quarter})
 
     def parse(self, response):
         """
-        这个方法将不再用于直接爬取基金排名，而是生成持仓数据的请求。
-        """
-        for fund_code, year in self.funds_to_scrape:
-            # 访问基金持仓详情页面，这里通过修改 URL 参数来获取完整的持仓数据
-            # 移除 topline 参数，或者将它的值设置得足够大，例如 1000
-            url = f'http://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={fund_code}&year={year}&topline=1000'
-            yield scrapy.Request(url, callback=self.parse_fund_data, meta={'fund_code': fund_code, 'year': year})
-
-    def parse_fund_data(self, response):
-        """
-        解析基金持仓数据。
+        解析网页响应，提取基金持仓数据。
         """
         fund_code = response.meta['fund_code']
         year = response.meta['year']
+        quarter = response.meta['quarter']
 
         try:
-            # 从响应文本中提取 var apidata = { ... } 部分
-            data_str = re.search(r'var apidata=\{ content:\"(.*?)\",', response.text, re.DOTALL).group(1)
-            
-            # 使用 pandas 读取 HTML 表格。这里需要 html5lib 依赖。
-            # 解决 'Missing optional dependency 'html5lib'' 错误
-            tables = pd.read_html(data_str, encoding='utf-8')
-            
-            if not tables:
-                self.logger.info(f'❌ 未找到数据表 - 基金 {fund_code}, 年份 {year}')
+            # 网页内容是一个JavaScript变量，使用正则表达式提取
+            content_match = re.search(r'var apidata = { content:"(.*)"', response.text, re.S)
+            if not content_match:
+                self.log(f'ℹ️ 警告：未在响应中找到基金 {fund_code} 在 {year} 年第 {quarter} 季度的数据内容。')
                 return
 
-            # 解析并保存每个季度的持仓数据
-            for i, df in enumerate(tables):
-                # 季度信息通常在表格上方
-                quarter_info = re.findall(r'(\d{4}年\d季度)', data_str)[i] if len(re.findall(r'(\d{4}年\d季度)', data_str)) > i else f'第{i+1}季度'
-                
-                # 确保 DataFrame 包含我们需要的列，并进行清理
-                if '股票代码' in df.columns and '占净值比例' in df.columns:
-                    # 获取基金名称和基金代码
-                    fund_name_match = re.search(r'([\u4e00-\u9fa5]+)\s+第', data_str)
-                    fund_name = fund_name_match.group(1) if fund_name_match else fund_code
-
-                    # 为数据添加年份和季度信息
-                    df['基金代码'] = fund_code
-                    df['基金名称'] = fund_name
-                    df['年份'] = year
-                    df['季度'] = quarter_info
-                    
-                    # 清理列名中的空格
-                    df.columns = df.columns.str.replace(r'\s+','', regex=True)
-                    
-                    # 定义保存路径和文件名
-                    # 例如: fund_data/持仓_017836_2025_4季度.csv
-                    filename = os.path.join('fund_data', f'持仓_{fund_code}_{year}_{quarter_info}.csv')
-
-                    # 检查文件夹是否存在，不存在则创建
-                    if not os.path.exists('fund_data'):
-                        os.makedirs('fund_data')
-
-                    # 将数据保存为 CSV 文件
-                    df.to_csv(filename, index=False, encoding='utf-8-sig')
-                    self.logger.info(f'✅ 成功获取基金 {fund_code} 在 {quarter_info} 的持仓数据，记录数：{len(df)}')
-                    self.logger.info(f'💾 数据已保存: {filename}')
-                else:
-                    self.logger.warning(f'⚠️ 表格结构不匹配，无法解析持仓数据 - 基金 {fund_code}, 年份 {year}, 表 {i+1}')
+            html_content = content_match.group(1)
             
+            # 使用pandas的read_html函数解析HTML表格
+            # lxml和html5lib是可选的解析器，如果出现错误，请确保已安装
+            dfs = pd.read_html(html_content, parser='lxml')
+            
+            if dfs:
+                df = dfs[0]
+
+                # 数据清洗与重构
+                df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
+                df = df.iloc[:, 1:] # 移除"序号"列
+                df.insert(0, '基金代码', fund_code)
+                df.insert(1, '年份', year)
+                df.insert(2, '季度', quarter)
+
+                # 将数据转换为JSON格式
+                data_records = df.to_dict('records')
+                
+                # 将数据保存到Firestore
+                collection_path = f'artifacts/{__app_id}/public/data/fund_holdings'
+                for record in data_records:
+                    doc_ref = db.collection(collection_path).add(record)
+                    self.log(f'💾 数据已保存到 Firestore: {doc_ref.id}')
+
+                self.log(f'✅ 成功获取基金 {fund_code} 在 {year} 年第 {quarter} 季度的持仓数据，记录数：{len(df)}')
+            else:
+                self.log(f'ℹ️ 警告：未找到基金 {fund_code} 在 {year} 年第 {quarter} 季度的数据表格')
+
         except Exception as e:
-            self.logger.error(f'❌ 未知错误 - 基金 {fund_code}, 年份 {year}: {e}')
-            self.logger.info('💡 提示: 如果你看到 "Missing optional dependency \'html5lib\'" 错误，请运行以下命令安装：')
-            self.logger.info('pip install html5lib')
-            self.logger.info('pip install lxml')
+            self.log(f'❌ 错误 - 基金 {fund_code}, 年份 {year}, 季度 {quarter}: {e}')
