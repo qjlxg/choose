@@ -15,8 +15,8 @@ import re
 from fake_useragent import UserAgent
 import os
 from datetime import datetime
-import re
 import json
+import ast
 
 class FundDataCrawler:
     def __init__(self, output_dir='fund_data'):
@@ -255,8 +255,14 @@ class FundDataCrawler:
                     print(f"未在响应中找到基金 {fund_code} {year}年的数据")
                     continue
                     
-                api_data_str = match.group(1)
-                api_data = json.loads(api_data_str)
+                api_data_str = match.group(1).strip()
+                
+                # 修复 JavaScript 格式以适应 JSON 解析
+                # 方案一：使用 ast.literal_eval
+                # 这是最安全的方案，因为它能处理非标准JSON格式（例如不带双引号的属性名）
+                # 注意：这里需要替换布尔值（`true`）和空值（`null`），因为 ast.literal_eval 不支持这些
+                api_data = ast.literal_eval(api_data_str.replace('content:', '"content":').replace('arryear:', '"arryear:"'))
+                
                 content = api_data.get('content', '')
                 
                 # 使用正则表达式解析持仓表格
@@ -433,7 +439,7 @@ def main():
         
         # 步骤2: 批量爬取持仓数据
         print("\n=== 步骤2: 批量爬取持仓数据 ===")
-        years_to_crawl = [2025]  # 指定爬取年份
+        years_to_crawl = [2025, 2024, 2023]  # 指定爬取年份，爬取近三年数据
         holdings_data = crawler.batch_crawl_fund_holdings(
             fund_list_df, 
             max_funds=len(codes_to_crawl),
