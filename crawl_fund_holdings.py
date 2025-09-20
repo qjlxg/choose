@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 一个用于爬取天天基金网全市场基金持仓数据的Python脚本
-增强版：添加年份选择器诊断和自适应定位功能
+修复版：针对LoadStockPos异步加载机制的优化
 """
 import os
 import time
@@ -18,24 +18,15 @@ from selenium.common.exceptions import TimeoutException, WebDriverException, Sta
 from bs4 import BeautifulSoup
 import logging
 import random
-from typing import List, Dict, Optional, Tuple
-from selenium.webdriver.common.action_chains import ActionChains
+from typing import List, Dict, Optional
+import json
 
-# --- 配置日志系统（增强版） ---
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('crawler_debug.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
+# --- 配置日志系统 ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- 新增：解析Markdown文件，提取基金代码 ---
+# --- 解析Markdown文件，提取基金代码 ---
 def parse_markdown_file(file_path: str) -> List[Dict[str, str]]:
-    """
-    解析Markdown文件，提取"弱买入"或"强买入"的基金代码。
-    """
+    """解析Markdown文件，提取"弱买入"或"强买入"的基金代码。"""
     if not os.path.exists(file_path):
         logging.error(f"❌ 错误：文件未找到 -> {file_path}")
         return []
@@ -65,23 +56,19 @@ def parse_markdown_file(file_path: str) -> List[Dict[str, str]]:
         logging.error(f"❌ 解析Markdown文件时发生错误：{e}")
         return []
 
-# --- 新增：股票信息缓存 ---
+# --- 股票信息缓存 ---
 stock_info_cache = {}
 
-# --- 新增：User-Agent池 ---
+# --- User-Agent池 ---
 user_agent_pool = [
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
 ]
 
 # --- 获取股票行业和主题信息 ---
 def get_stock_info(stock_code: str) -> Dict[str, str]:
-    """
-    根据股票代码爬取东方财富网，获取所属行业和概念主题。
-    """
+    """根据股票代码爬取东方财富网，获取所属行业和概念主题。"""
     if not stock_code or stock_code == '':
         return {'所属行业': '未知', '概念主题': '未知'}
     
@@ -90,51 +77,40 @@ def get_stock_info(stock_code: str) -> Dict[str, str]:
     
     info = {'所属行业': '未知', '概念主题': '未知'}
     
-    # 验证股票代码格式 (6位数字)
     if not re.match(r'^\d{6}$', stock_code):
         stock_info_cache[stock_code] = info
         return info
     
-    url = f"https://wap.eastmoney.com/quote/stock/{stock_code}.html"
-    headers = {
-        "User-Agent": random.choice(user_agent_pool),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "Accept-Encoding": "gzip, deflate",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-    }
+    url = f"https://quote.eastmoney.com/sh{stock_code[:3]}.html" if stock_code.startswith(('60', '68')) else f"https://quote.eastmoney.com/sz{stock_code[3:]}.html"
+    headers = {"User-Agent": random.choice(user_agent_pool)}
     
     try:
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'lxml')
 
-        # 尝试获取所属行业
-        industry_div = soup.find('div', string=re.compile(r'所属行业'))
-        if industry_div and industry_div.find_next_sibling('div'):
-            info['所属行业'] = industry_div.find_next_sibling('div').text.strip()
-        
-        # 尝试获取概念主题
-        theme_div = soup.find('div', string=re.compile(r'概念主题'))
-        if theme_div and theme_div.find_next_sibling('div'):
-            theme_links = theme_div.find_next_sibling('div').find_all('a')
-            themes = [link.text.strip() for link in theme_links]
-            info['概念主题'] = ', '.join(themes)
+        # 获取行业信息
+        industry_elem = soup.find('span', string=re.compile(r'行业'))
+        if industry_elem:
+            industry_text = industry_elem.find_next_sibling('a')
+            if industry_text:
+                info['所属行业'] = industry_text.text.strip()
+
+        # 获取概念信息
+        concept_section = soup.find('div', string=re.compile(r'概念板块'))
+        if concept_section:
+            concepts = concept_section.find_next_sibling('div').find_all('a')
+            info['概念主题'] = ', '.join([c.text.strip() for c in concepts[:5]])
 
         stock_info_cache[stock_code] = info
 
-    except requests.exceptions.RequestException as e:
-        logging.warning(f"❌ 爬取股票 {stock_code} 信息失败: {e}")
     except Exception as e:
-        logging.warning(f"❌ 解析股票 {stock_code} 页面失败: {e}")
+        logging.warning(f"❌ 股票 {stock_code} 信息获取失败: {e}")
     
-    # 动态延时
-    time.sleep(random.uniform(0.5, 1.5))
-    
+    time.sleep(random.uniform(0.5, 1.0))
     return info
 
-# --- 配置Selenium ---
+# --- 配置Selenium（修复版） ---
 def setup_driver() -> Optional[webdriver.Chrome]:
     """配置并返回一个无头模式的Chrome浏览器驱动。"""
     logging.info("--- 正在启动 ChromeDriver ---")
@@ -145,18 +121,18 @@ def setup_driver() -> Optional[webdriver.Chrome]:
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
         chrome_options.add_argument('--window-size=1920,1080')
-        chrome_options.add_argument('--disable-extensions')
-        chrome_options.add_argument('--disable-plugins')
         chrome_options.add_argument('--disable-images')
-        chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-        # 启用JavaScript性能日志
+        chrome_options.add_argument('--disable-plugins-discovery')
+        chrome_options.add_argument('--disable-extensions')
+        # 关键：启用性能日志以监控JavaScript执行
         chrome_options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
         
-        chromedriver_path = os.getenv('CHROMEDRIVER_PATH', '/usr/lib/chromium-browser/chromedriver')
+        chromedriver_path = os.getenv('CHROMEDRIVER_PATH', '/usr/bin/chromedriver')
         service = Service(chromedriver_path)
         
         driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.implicitly_wait(10)
+        driver.set_page_load_timeout(60)
+        driver.implicitly_wait(15)
         
         logging.info("🎉 ChromeDriver 启动成功！")
         return driver
@@ -164,144 +140,132 @@ def setup_driver() -> Optional[webdriver.Chrome]:
         logging.error(f"❌ ChromeDriver 启动失败：{e}")
         return None
 
-# --- 新增：年份选择器诊断函数 ---
-def diagnose_year_selectors(driver: webdriver.Chrome, fund_code: str, year: str) -> Tuple[bool, str]:
+# --- 新增：等待LoadStockPos完成 ---
+def wait_for_loadstockpos_complete(driver: webdriver.Chrome, fund_code: str, timeout: int = 60) -> bool:
     """
-    诊断年份选择器并尝试智能定位
-    返回 (成功, 调试信息)
+    等待LoadStockPos函数完成数据加载
+    通过监控页面变化和网络请求来判断
     """
-    logging.info(f"🔍 开始诊断 {year} 年选择器...")
+    logging.info(f"⏳ 等待 LoadStockPos 完成加载 (基金 {fund_code})...")
     
-    # 等待页面完全加载
-    time.sleep(5)
+    start_time = time.time()
     
-    # 1. 保存页面源码用于分析
-    with open(f'debug_page_{fund_code}_{year}.html', 'w', encoding='utf-8') as f:
-        f.write(driver.page_source)
-    logging.info(f"💾 已保存调试页面: debug_page_{fund_code}_{year}.html")
-    
-    # 2. 多种选择器策略
-    selector_strategies = [
-        # 策略1：精确匹配
-        [
-            (By.XPATH, f"//label[@value='{year}']"),
-            (By.XPATH, f"//input[@value='{year}']"),
-            (By.XPATH, f"//option[@value='{year}']"),
-        ],
-        # 策略2：文本匹配
-        [
-            (By.XPATH, f"//*[contains(text(), '{year}') and (@class='active' or @class='current')]"),
-            (By.XPATH, f"//a[contains(text(), '{year}')]"),
-            (By.XPATH, f"//span[contains(text(), '{year}')]"),
-            (By.XPATH, f"//div[contains(text(), '{year}')]"),
-        ],
-        # 策略3：模糊匹配
-        [
-            (By.XPATH, f"//*[contains(@class, 'year') or contains(@class, 'select') or contains(@class, 'tab')]/*[contains(text(), '{year}')]"),
-            (By.CSS_SELECTOR, f"[data-year='{year}']"),
-            (By.CSS_SELECTOR, f".year-{year}"),
-        ],
-        # 策略4：通用选择器
-        [
-            (By.ID, "jjcc"),
-            (By.ID, "pagebar"),
-            (By.CLASS_NAME, "selcc"),
-        ],
-    ]
-    
-    all_elements = []
-    
-    # 尝试所有策略
-    for strategy_id, selectors in enumerate(selector_strategies, 1):
-        logging.info(f"  策略 {strategy_id}: 测试 {len(selectors)} 个选择器")
-        
-        for selector_id, (by, value) in enumerate(selectors, 1):
-            try:
-                elements = driver.find_elements(by, value)
-                logging.info(f"    选择器 {selector_id}: {by}={value[:50]}... -> 找到 {len(elements)} 个元素")
-                
-                for i, element in enumerate(elements):
-                    try:
-                        text = element.text.strip()
-                        is_displayed = element.is_displayed()
-                        is_enabled = element.is_enabled()
-                        
-                        element_info = {
-                            'text': text,
-                            'tag': element.tag_name,
-                            'class': element.get_attribute('class'),
-                            'value': element.get_attribute('value'),
-                            'id': element.get_attribute('id'),
-                            'displayed': is_displayed,
-                            'enabled': is_enabled
-                        }
-                        
-                        all_elements.append((element_info, element))
-                        
-                        # 如果元素包含目标年份且可交互，优先选择
-                        if year in text and is_displayed and is_enabled:
-                            logging.info(f"    🎯 找到目标元素: {text} (显示:{is_displayed}, 启用:{is_enabled})")
-                            return True, f"策略{strategy_id}-{selector_id} 找到目标元素: {text}"
-                            
-                    except Exception as e:
-                        logging.debug(f"    元素 {i} 分析失败: {e}")
-                        
-            except Exception as e:
-                logging.debug(f"    选择器 {selector_id} 执行失败: {e}")
-    
-    # 3. 如果精确匹配失败，尝试通用交互
-    logging.info("🔄 尝试通用交互策略...")
-    
-    # 查找所有可能的可点击元素
-    clickable_selectors = [
-        (By.TAG_NAME, "select"),
-        (By.TAG_NAME, "button"),
-        (By.CSS_SELECTOR, "input[type='button'], input[type='submit']"),
-        (By.CSS_SELECTOR, ".btn, .button, [role='button']"),
-        (By.XPATH, "//*[contains(@onclick, 'year') or contains(@onclick, 'select')]"),
-    ]
-    
-    for by, value in clickable_selectors:
+    while time.time() - start_time < timeout:
         try:
-            elements = driver.find_elements(by, value)
-            for element in elements:
-                if element.is_displayed() and element.is_enabled():
-                    text = element.text.strip()
-                    logging.info(f"🔘 发现可点击元素: {text} (类型: {element.tag_name})")
-                    
-                    # 尝试点击
-                    try:
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-                        time.sleep(1)
-                        ActionChains(driver).move_to_element(element).click().perform()
-                        time.sleep(2)
-                        
-                        # 检查点击后是否出现年份选项
-                        new_elements = driver.find_elements(By.XPATH, f"//*[contains(text(), '{year}')]")
-                        if new_elements:
-                            logging.info(f"✅ 通用点击成功，找到 {len(new_elements)} 个年份元素")
-                            return True, f"通用点击成功找到年份选项"
-                            
-                    except Exception as click_error:
-                        logging.debug(f"点击元素失败: {click_error}")
-                        
-        except Exception as e:
-            logging.debug(f"通用选择器执行失败: {e}")
+            # 1. 检查年份选择器是否已填充
+            year_select = WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located((By.ID, "jjcc"))
+            )
+            
+            # 检查select是否有option
+            options = driver.find_elements(By.CSS_SELECTOR, "#jjcc option")
+            if len(options) > 1:  # 至少有一个年份选项
+                logging.info(f"✅ 年份选择器已填充，找到 {len(options)-1} 个年份选项")
+                break
+                
+        except TimeoutException:
+            pass
+        
+        # 2. 检查加载动画是否消失
+        try:
+            loading_img = driver.find_element(By.XPATH, "//img[@src*='loading2.gif']")
+            if not loading_img.is_displayed():
+                logging.info("✅ 加载动画已消失")
+                break
+        except:
+            logging.info("✅ 无加载动画")
+            break
+        
+        # 3. 检查cctable是否有实际数据
+        try:
+            cctable = driver.find_element(By.ID, "cctable")
+            if "数据加载中" not in cctable.text:
+                logging.info("✅ 持仓表格已加载数据")
+                break
+        except:
+            pass
+        
+        # 4. 监控网络请求（检查是否有数据请求完成）
+        logs = driver.get_log('performance')
+        has_data_request = any(
+            "fund.eastmoney.com" in log['message']['message']['params'].get('request', {}).get('url', '') 
+            or "eastmoney.com" in log['message']['message']['params'].get('request', {}).get('url', '')
+            for log in logs[-10:]  # 检查最近10条日志
+        )
+        
+        if has_data_request:
+            logging.info("🔄 检测到数据请求，等待响应...")
+        
+        time.sleep(2)
     
-    # 4. 最后的调试信息
-    debug_info = f"未找到 {year} 年选择器\n"
-    debug_info += f"总共发现 {len(all_elements)} 个相关元素\n"
+    total_time = time.time() - start_time
+    if total_time >= timeout:
+        logging.warning(f"⚠️  LoadStockPos 加载超时 ({total_time:.1f}s)")
+        return False
     
-    if all_elements:
-        debug_info += "\n前5个发现的元素:\n"
-        for i, (elem_info, _) in enumerate(all_elements[:5]):
-            debug_info += f"  {i+1}. {elem_info['tag']}[{elem_info['text'][:30]}...] "
-            debug_info += f"(显示:{elem_info['displayed']}, 启用:{elem_info['enabled']})\n"
-    
-    logging.warning(f"❌ {debug_info}")
-    return False, debug_info
+    logging.info(f"✅ LoadStockPos 加载完成，耗时 {total_time:.1f}s")
+    return True
 
-# --- 专门解析持仓表格的函数 ---
+# --- 新增：智能年份选择 ---
+def select_year_intelligently(driver: webdriver.Chrome, target_year: str) -> bool:
+    """
+    智能选择年份：先获取所有可用年份，然后选择目标年份
+    """
+    try:
+        # 等待年份选项加载
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "jjcc"))
+        )
+        
+        # 获取所有年份选项
+        options = driver.find_elements(By.CSS_SELECTOR, "#jjcc option")
+        available_years = []
+        
+        for option in options[1:]:  # 跳过默认选项
+            year_text = option.text.strip()
+            if re.match(r'\d{4}', year_text):
+                available_years.append(year_text)
+        
+        logging.info(f"📋 可用年份: {available_years}")
+        
+        if not available_years:
+            logging.warning("❌ 未找到任何年份选项")
+            return False
+        
+        # 检查目标年份是否可用
+        if target_year in available_years:
+            logging.info(f"🎯 找到目标年份 {target_year}")
+        else:
+            # 选择最接近的年份
+            target_year = available_years[0]  # 默认选择第一个（通常是最新）
+            logging.warning(f"⚠️ 目标年份 {target_year} 不可用，使用 {target_year}")
+        
+        # 执行选择
+        year_option = driver.find_element(By.XPATH, f"//select[@id='jjcc']/option[contains(text(), '{target_year}')]")
+        
+        # 滚动到选择器位置
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", year_option)
+        time.sleep(1)
+        
+        # JavaScript点击避免Selenium的点击问题
+        driver.execute_script("arguments[0].parentNode.selectedIndex = arguments[1];", 
+                             driver.find_element(By.ID, "jjcc"), available_years.index(target_year))
+        
+        # 触发change事件
+        driver.execute_script("arguments[0].dispatchEvent(new Event('change', {bubbles: true}));", 
+                             driver.find_element(By.ID, "jjcc"))
+        
+        logging.info(f"✅ 已选择年份: {target_year}")
+        
+        # 等待数据重新加载
+        time.sleep(5)
+        return True
+        
+    except Exception as e:
+        logging.error(f"❌ 年份选择失败: {e}")
+        return False
+
+# --- 解析持仓表格（优化版） ---
 def parse_holdings_table(soup: BeautifulSoup, fund_code: str, year: str) -> List[Dict]:
     """专门解析持仓表格的函数"""
     holdings_table = soup.find(id="cctable")
@@ -309,61 +273,85 @@ def parse_holdings_table(soup: BeautifulSoup, fund_code: str, year: str) -> List
         logging.warning(f"未找到持仓表格 #cctable")
         return []
     
-    # 检查是否还在加载状态
-    loading_div = holdings_table.find('div', style=re.compile(r'text-align:\s*center'))
-    if loading_div and '数据加载中' in loading_div.get_text():
-        logging.warning(f"持仓表格仍在加载中，跳过 {fund_code} {year} 年数据")
+    # 检查加载状态
+    loading_div = holdings_table.find('div', string=re.compile(r'数据加载中'))
+    if loading_div:
+        logging.warning(f"持仓表格仍在加载，跳过 {fund_code} {year} 年数据")
         return []
     
     holdings = []
-    rows = holdings_table.find_all('tr')
+    # 查找表格行（支持多种结构）
+    rows = holdings_table.find_all('tr') or []
+    
     if not rows or len(rows) <= 1:
-        # 尝试其他可能的表格结构
-        div_rows = holdings_table.find_all('div', recursive=False)
+        # 尝试div表格结构
+        div_rows = holdings_table.find_all('div', class_=re.compile(r'row|item'))
         if div_rows:
-            rows = [BeautifulSoup(f"<tr>{div_row}</tr>", 'lxml').find('tr') for div_row in div_rows]
+            logging.info(f"使用div表格结构，找到 {len(div_rows)} 行")
+            for div_row in div_rows:
+                cols = div_row.find_all(['span', 'div', 'td'])
+                if len(cols) >= 4:  # 至少4列
+                    try:
+                        stock_code = re.search(r'(\d{6})', cols[1].text).group(1) if re.search(r'(\d{6})', cols[1].text) else ''
+                        stock_name = cols[2].text.strip() if len(cols) > 2 else ''
+                        
+                        stock_info = get_stock_info(stock_code)
+                        
+                        data = {
+                            '基金代码': fund_code,
+                            '年份': year,
+                            '股票代码': stock_code,
+                            '股票名称': stock_name,
+                            '所属行业': stock_info['所属行业'],
+                            '概念主题': stock_info['概念主题'],
+                            '持仓占比': cols[3].text.strip() if len(cols) > 3 else '',
+                            '持股数': cols[4].text.strip() if len(cols) > 4 else '',
+                            '市值': cols[5].text.strip() if len(cols) > 5 else '',
+                            '报告日期': cols[0].text.strip() if len(cols) > 0 else ''
+                        }
+                        holdings.append(data)
+                    except Exception as e:
+                        logging.debug(f"解析div行失败: {e}")
+                        continue
         else:
-            logging.warning(f"未找到有效的表格行数据")
+            logging.warning(f"未找到有效的表格结构")
             return []
+    else:
+        # 标准table结构
+        for row in rows[1:]:  # 跳过表头
+            cols = row.find_all('td')
+            if len(cols) >= 4:
+                try:
+                    stock_code = re.search(r'(\d{6})', cols[1].text).group(1) if re.search(r'(\d{6})', cols[1].text) else ''
+                    stock_name = cols[2].text.strip() if len(cols) > 2 else ''
+                    
+                    stock_info = get_stock_info(stock_code)
+                    
+                    data = {
+                        '基金代码': fund_code,
+                        '年份': year,
+                        '股票代码': stock_code,
+                        '股票名称': stock_name,
+                        '所属行业': stock_info['所属行业'],
+                        '概念主题': stock_info['概念主题'],
+                        '持仓占比': cols[3].text.strip() if len(cols) > 3 else '',
+                        '持股数': cols[4].text.strip() if len(cols) > 4 else '',
+                        '市值': cols[5].text.strip() if len(cols) > 5 else '',
+                        '报告日期': cols[0].text.strip() if len(cols) > 0 else ''
+                    }
+                    holdings.append(data)
+                except Exception as e:
+                    logging.debug(f"解析行数据失败: {e}")
+                    continue
     
-    for i, row in enumerate(rows[1:], 1):
-        cols = row.find_all('td')
-        if len(cols) >= 5:
-            try:
-                stock_code = cols[1].text.strip() if len(cols) > 1 else ''
-                
-                # 提取6位股票代码
-                code_match = re.search(r'(\d{6})', stock_code)
-                if code_match:
-                    stock_code = code_match.group(1)
-                
-                # 获取股票行业和主题信息
-                stock_info = get_stock_info(stock_code)
-                
-                data = {
-                    '基金代码': fund_code,
-                    '年份': year,
-                    '股票代码': stock_code,
-                    '股票名称': cols[2].text.strip() if len(cols) > 2 else '',
-                    '所属行业': stock_info['所属行业'],
-                    '概念主题': stock_info['概念主题'],
-                    '持仓占比': cols[3].text.strip() if len(cols) > 3 else '',
-                    '持股数': cols[4].text.strip() if len(cols) > 4 else '',
-                    '市值': cols[5].text.strip() if len(cols) > 5 else '',
-                    '报告日期': cols[0].text.strip() if len(cols) > 0 else ''
-                }
-                holdings.append(data)
-            except Exception as e:
-                logging.warning(f"解析行数据失败: {e}")
-                continue
-    
+    logging.info(f"✅ 解析完成: {len(holdings)} 条 {year} 年持仓记录")
     return holdings
 
-# --- 优化：爬取指定基金持仓数据（增强版） ---
+# --- 修复版：爬取指定基金持仓数据 ---
 def get_fund_holdings(driver: webdriver.Chrome, fund_code: str, years_to_crawl: List[str], max_retries: int = 3) -> pd.DataFrame:
     """
     爬取指定基金在近N年内的持仓数据。
-    增强版：添加选择器诊断和自适应点击
+    修复版：正确处理LoadStockPos异步加载
     """
     if driver is None:
         logging.error("WebDriver 实例不存在，跳过爬取。")
@@ -372,126 +360,124 @@ def get_fund_holdings(driver: webdriver.Chrome, fund_code: str, years_to_crawl: 
     fund_holdings = []
     base_url = f"https://fundf10.eastmoney.com/ccmx_{fund_code}.html"
 
-    logging.info(f"访问基金 {fund_code} 页面: {base_url}")
+    logging.info(f"🌐 访问基金 {fund_code} 页面: {base_url}")
     
-    # 页面加载
+    # 页面加载重试
     for attempt in range(max_retries):
         try:
-            logging.info(f"尝试访问页面 (第{attempt+1}次)...")
+            logging.info(f"🚀 尝试访问页面 (第{attempt+1}次)...")
             driver.get(base_url)
             
-            wait = WebDriverWait(driver, 30)
-            wait.until(
-                EC.any_of(
-                    EC.presence_of_element_located((By.ID, "cctable")),
-                    EC.presence_of_element_located((By.ID, "pagebar")),
-                    EC.presence_of_element_located((By.CLASS_NAME, "tit_h3"))
-                )
+            # 等待基本页面结构
+            WebDriverWait(driver, 30).until(
+                EC.presence_of_element_located((By.ID, "cctable"))
             )
             
-            # 等待JavaScript执行
-            time.sleep(5)
+            # 关键：等待LoadStockPos完成
+            if not wait_for_loadstockpos_complete(driver, fund_code):
+                if attempt == max_retries - 1:
+                    logging.error(f"❌ LoadStockPos 加载失败，已重试{max_retries}次")
+                    return pd.DataFrame()
+                time.sleep(5)
+                continue
             
-            page_source_check = driver.page_source
-            if "暂无数据" in page_source_check or "没有找到" in page_source_check:
-                logging.info(f"基金 {fund_code} 暂无持仓数据")
-                return pd.DataFrame()
+            # 验证页面是否正确加载
+            page_source = driver.page_source
+            if "017484" not in page_source and fund_code not in page_source:
+                logging.warning(f"页面可能加载错误，未找到基金 {fund_code} 标识")
+                if attempt == max_retries - 1:
+                    return pd.DataFrame()
+                time.sleep(3)
+                continue
             
-            logging.info("页面加载成功，准备解析数据。")
+            logging.info("✅ 页面和数据加载成功！")
             break
             
         except TimeoutException:
-            logging.warning(f"页面加载超时，基金 {fund_code} (第{attempt+1}/{max_retries}次重试)")
+            logging.warning(f"页面加载超时 (第{attempt+1}/{max_retries}次)")
             if attempt == max_retries - 1:
-                logging.error(f"基金 {fund_code} 页面加载失败，已重试{max_retries}次，跳过。")
                 return pd.DataFrame()
             time.sleep(2 ** attempt)
         except Exception as e:
-            logging.error(f"访问基金 {fund_code} 页面时发生意外错误：{e}")
+            logging.error(f"访问页面时发生错误：{e}")
             if attempt == max_retries - 1:
                 return pd.DataFrame()
             time.sleep(2 ** attempt)
 
-    # 年份数据爬取（增强版）
+    # 年份数据爬取
     for year in years_to_crawl:
         try:
-            logging.info(f"正在爬取 {year} 年持仓数据...")
+            logging.info(f"📅 正在处理 {year} 年数据...")
             
-            # 诊断并尝试选择年份
-            success, debug_info = diagnose_year_selectors(driver, fund_code, year)
-            
-            if not success:
-                logging.warning(f"❌ {debug_info}")
-                
-                # 尝试直接解析当前页面（可能默认显示最新年份）
-                logging.info("🔄 尝试解析当前显示的持仓数据...")
+            # 智能选择年份
+            if not select_year_intelligently(driver, year):
+                logging.warning(f"⚠️ 无法选择 {year} 年，尝试解析当前显示数据")
+                # 解析当前页面数据
                 page_source = driver.page_source
                 soup = BeautifulSoup(page_source, 'lxml')
-                
                 current_holdings = parse_holdings_table(soup, fund_code, year)
                 if current_holdings:
-                    logging.info(f"✅ 从当前页面解析到 {len(current_holdings)} 条记录")
                     fund_holdings.extend(current_holdings)
-                else:
-                    logging.warning(f"当前页面也无有效数据，跳过 {year} 年")
+                    logging.info(f"✅ 从当前页面获取 {len(current_holdings)} 条记录")
                 continue
-            else:
-                logging.info(f"✅ {debug_info}")
             
-            # 等待数据加载
-            wait = WebDriverWait(driver, 15)
-            try:
-                wait.until_not(
-                    EC.presence_of_element_located((By.XPATH, "//img[@src*='loading2.gif']"))
-                )
-            except TimeoutException:
-                logging.warning("加载动画未消失，但继续解析...")
+            # 等待年份切换后的数据加载
+            time.sleep(5)
+            
+            # 再次等待LoadStockPos完成（年份切换触发）
+            wait_for_loadstockpos_complete(driver, fund_code, timeout=30)
             
             # 解析数据
-            time.sleep(3)  # 额外等待
             page_source = driver.page_source
             soup = BeautifulSoup(page_source, 'lxml')
             
             holdings = parse_holdings_table(soup, fund_code, year)
             fund_holdings.extend(holdings)
-            logging.info(f"✅ 成功获取 {len(holdings)} 条 {year} 年的持仓记录。")
+            
+            if holdings:
+                logging.info(f"✅ 成功获取 {len(holdings)} 条 {year} 年持仓记录")
+            else:
+                logging.warning(f"❌ {year} 年无持仓数据")
+            
+            time.sleep(random.uniform(1, 2))
             
         except Exception as e:
-            logging.error(f"爬取基金 {fund_code} 的 {year} 年数据时发生错误：{e}")
+            logging.error(f"处理 {year} 年数据时出错：{e}")
             continue
-            
+    
     return pd.DataFrame(fund_holdings)
 
-
+# --- 主函数 ---
 def main():
     """主函数，执行爬取任务。"""
     current_year = time.localtime().tm_year
     years_to_crawl = [str(current_year), str(current_year - 1), str(current_year - 2)]
     
-    request_delay = random.uniform(1, 3)
+    request_delay = random.uniform(2, 4)
 
-    logging.info("=== 天天基金持仓数据爬取器（增强诊断版） ===")
-    logging.info(f"目标年份: {', '.join(years_to_crawl)}")
+    logging.info("=== 天天基金持仓数据爬取器（修复版） ===")
+    logging.info(f"🎯 目标年份: {', '.join(years_to_crawl)}")
+    logging.info(f"⏱️  延时设置: {request_delay:.1f}秒")
     
     report_file = 'market_monitor_report.md'
     fund_list_to_crawl = parse_markdown_file(report_file)
     if not fund_list_to_crawl:
-        logging.error(f"无法从文件 '{report_file}' 获取基金代码列表，程序退出。")
+        logging.error(f"❌ 无法从 '{report_file}' 获取基金列表，程序退出")
         return
 
-    logging.info(f"📊 准备爬取 {len(fund_list_to_crawl)} 只指定基金")
+    logging.info(f"📊 准备爬取 {len(fund_list_to_crawl)} 只基金")
     
     output_dir = "fund_data"
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-        
+    os.makedirs(output_dir, exist_ok=True)
+    
     timestamp = time.strftime('%Y%m%d_%H%M%S')
-    output_filename = os.path.join(output_dir, f"target_fund_holdings_with_info_{timestamp}.csv")
+    output_filename = os.path.join(output_dir, f"fund_holdings_{timestamp}.csv")
     
     driver = setup_driver()
     if driver is None:
+        logging.error("❌ 浏览器启动失败")
         return
-        
+    
     all_holdings_df = pd.DataFrame()
     successful_funds = 0
     
@@ -500,36 +486,51 @@ def main():
             fund_code = fund['code']
             fund_name = fund['name']
             
-            logging.info(f"\n--- [{i}/{len(fund_list_to_crawl)}] 正在处理: {fund_name} ({fund_code}) ---")
+            logging.info(f"\n{'='*60}")
+            logging.info(f"🔄 [{i}/{len(fund_list_to_crawl)}] 处理: {fund_name} ({fund_code})")
+            logging.info(f"{'='*60}")
             
             holdings_df = get_fund_holdings(driver, fund_code, years_to_crawl)
+            
             if not holdings_df.empty:
                 all_holdings_df = pd.concat([all_holdings_df, holdings_df], ignore_index=True)
                 successful_funds += 1
-                logging.info(f"✅ 成功获取 {len(holdings_df)} 条持仓记录")
+                logging.info(f"✅ 成功获取 {len(holdings_df)} 条记录")
+                
+                # 显示数据预览
+                logging.info(f"📋 数据预览:")
+                for _, row in holdings_df.head(2).iterrows():
+                    logging.info(f"   {row['股票代码']} - {row['股票名称'][:20]}... ({row['持仓占比']})")
             else:
-                logging.info("❌ 未获取到数据，继续下一只基金。")
+                logging.info("❌ 未获取到数据")
             
+            # 基金间延时
+            logging.info(f"💤 等待 {request_delay:.1f} 秒...")
             time.sleep(request_delay)
             
     finally:
-        logging.info("爬取任务结束，关闭 WebDriver。")
-        if driver:
-            driver.quit()
+        logging.info("🔚 爬取任务结束，关闭浏览器")
+        driver.quit()
     
-    # 结果处理
+    # 结果保存
     if not all_holdings_df.empty:
-        logging.info("\n🎉 数据爬取完成!")
-        logging.info(f"📁 已保存到文件：{output_filename}")
-        logging.info(f"📈 总记录数: {len(all_holdings_df)}")
-        logging.info(f"✅ 成功基金: {successful_funds}/{len(fund_list_to_crawl)}")
+        logging.info("\n" + "🎉" * 20)
+        logging.info("📊 爬取统计:")
+        logging.info(f"   总记录数: {len(all_holdings_df):,}")
+        logging.info(f"   成功基金: {successful_funds}/{len(fund_list_to_crawl)}")
+        logging.info(f"   唯一股票: {all_holdings_df['股票代码'].nunique()}")
         
         try:
             all_holdings_df.to_csv(output_filename, index=False, encoding='utf-8-sig')
+            file_size = os.path.getsize(output_filename) / 1024
+            logging.info(f"💾 保存成功: {output_filename} ({file_size:.1f} KB)")
         except Exception as e:
-            logging.error(f"保存文件时发生错误：{e}")
+            logging.error(f"❌ 文件保存失败: {e}")
     else:
-        logging.info("❌ 没有爬取到任何数据。")
+        logging.warning("❌ 未获取到任何数据，创建空文件")
+        empty_df = pd.DataFrame(columns=['基金代码', '年份', '股票代码', '股票名称', '所属行业', 
+                                        '概念主题', '持仓占比', '持股数', '市值', '报告日期'])
+        empty_df.to_csv(output_filename, index=False, encoding='utf-8-sig')
 
 if __name__ == '__main__':
     main()
