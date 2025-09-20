@@ -96,7 +96,6 @@ def analyze_holdings():
 
         sector_summary = combined_df.groupby(['年份', '板块'])['占净值比例'].sum().unstack().fillna(0)
         
-        # 格式化表格数据
         formatted_sector_summary = sector_summary.copy()
         for col in formatted_sector_summary.columns:
             formatted_sector_summary[col] = formatted_sector_summary[col].apply(lambda x: f"{x:.2f}%" if x > 0 else "")
@@ -105,7 +104,6 @@ def analyze_holdings():
 
         concentration_summary = combined_df.groupby('季度')['占净值比例'].sum()
         
-        # 格式化表格数据
         formatted_concentration_summary = pd.DataFrame(concentration_summary)
         formatted_concentration_summary['占净值比例'] = formatted_concentration_summary['占净值比例'].apply(lambda x: f"{x:.2f}%")
         report.append("\n#### 前十大持仓集中度（占净值比例之和）")
@@ -114,7 +112,6 @@ def analyze_holdings():
         # 3. 趋势总结分析
         report.append("\n### 3. 趋势总结")
         
-        # 集中度变化分析
         if len(concentration_summary) > 1:
             first_q = concentration_summary.index[0]
             last_q = concentration_summary.index[-1]
@@ -124,7 +121,6 @@ def analyze_holdings():
             trend = "上升" if last_concentration > first_concentration else "下降" if last_concentration < first_concentration else "保持稳定"
             report.append(f"- **持仓集中度**：从 {first_q} 到 {last_q}，前十大持仓集中度从 {first_concentration:.2f}% {trend}到 {last_concentration:.2f}%。这表明基金经理在分析期内，**{ '更倾向于' if trend == '上升' else '降低了' }** 投资集中度。")
 
-        # 板块偏好变化分析
         if len(sector_summary) > 1:
             first_year_summary = sector_summary.iloc[0].idxmax()
             last_year_summary = sector_summary.iloc[-1].idxmax()
@@ -132,6 +128,23 @@ def analyze_holdings():
                 report.append(f"- **板块偏好**：基金的投资偏好在分析期内发生了显著变化。最初主要集中在**{first_year_summary}**，而最新季度则转向了**{last_year_summary}**。这可能反映了基金经理对市场热点或行业前景的最新判断。")
             else:
                 report.append(f"- **板块偏好**：基金在分析期内保持了较为稳定的投资风格，主要偏向于**{first_year_summary}**板块。")
+
+        # 4. 投资建议和风险防范
+        report.append("\n### 4. 投资建议和风险防范")
+        report.append("> **免责声明**：本报告基于历史持仓数据进行分析，不构成任何投资建议。投资有风险，入市需谨慎。")
+        report.append("\n基于以上分析，你可以进一步思考和研究以下方面：")
+        report.append("\n**评估基金风格与个人风险偏好**")
+        report.append("- **集中度**：持仓集中度高意味着基金经理重仓少数股票，潜在收益和风险都更高。如果你的风险偏好较低，可能需要规避这类基金。")
+        report.append("- **板块偏好**：基金的持仓板块反映了其投资风格。你是否看好这些行业的未来前景？这些行业是否符合你的风险承受能力？")
+        report.append("\n**关注基金经理的策略变化**")
+        report.append("- **重仓股变动**：如果基金频繁更换重仓股，可能意味着基金经理在进行短线操作，投资风格偏向激进，这可能带来较高的波动性。")
+        report.append("- **板块变动**：如果板块配置在不同年份间发生显著变化，可能反映了基金经理对宏观经济或行业周期的判断。")
+        report.append("\n**综合考量其他关键因素**")
+        report.append("- **基金业绩**：历史持仓数据不能完全代表基金未来表现。请结合基金的长期业绩、同类基金排名等指标进行综合评估。")
+        report.append("- **费率结构**：不同基金的管理费、托管费和申赎费率都会影响你的实际投资收益。")
+        report.append("\n**防范风险建议**")
+        report.append("- **分散投资**：不要将所有资金都投入到单一基金中，通过配置不同风格和资产类别的基金，可以有效分散风险。")
+
 
     with open('analysis_report.md', 'w', encoding='utf-8') as f:
         f.write('\n'.join(report))
