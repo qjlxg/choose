@@ -173,7 +173,7 @@ class FundDataCrawler:
                 self.driver.get(url)
                 time.sleep(3)
                 
-                # 切换到指定年份
+                # --- 修复逻辑: 检查并点击年份按钮，如果不存在则跳过 ---
                 try:
                     year_button = self.wait.until(
                         EC.element_to_be_clickable(
@@ -184,6 +184,7 @@ class FundDataCrawler:
                     time.sleep(3)
                 except Exception as e:
                     print(f"年份切换失败 {year}: {e}")
+                    # 如果找不到该年份的按钮，则该基金可能没有当年的报告，直接跳过该年份
                     continue
                 
                 # 解析持仓表格
@@ -311,9 +312,8 @@ class FundDataCrawler:
         
         # 3. 持仓集中度分析
         print("\n3. 各基金持仓集中度分析:")
-        concentration = holdings_df.groupby('fund_code').apply(
-            lambda x: x['hold_ratio'].sum()
-        ).sort_values(ascending=False)
+        # --- 修复逻辑: 使用 .sum() 代替 .apply(lambda x: x.sum()) 解决 FutureWarning
+        concentration = holdings_df.groupby('fund_code')['hold_ratio'].sum().sort_values(ascending=False)
         print(f"最高集中度基金: {concentration.index[0]} (集中度: {concentration.iloc[0]:.1f}%)")
         print(f"平均集中度: {concentration.mean():.1f}%")
 
