@@ -239,7 +239,7 @@ def wait_for_loadstockpos_complete(driver: webdriver.Chrome, fund_code: str, tim
                 logging.info("✅ 加载动画已消失")
                 break
         except:
-            break
+            pass
         
         # 检查表格数据
         try:
@@ -527,8 +527,8 @@ def main():
                     sample = holdings_df.head(2)
                     for _, row in sample.iterrows():
                         industry = row['所属行业'][:15] if row['所属行业'] != '未知' else '未知'
-                        logging.info(f"   {row['股票代码']} - {row['股票名称'][:15]}... | "
-                                   f"行业: {industry} | 占比: {row['持仓占比']}")
+                        logging.info(f"    {row['股票代码']} - {row['股票名称'][:15]}... | "
+                                     f"行业: {industry} | 占比: {row['持仓占比']}")
             else:
                 logging.warning(f"❌ {fund_code} 无数据")
             
@@ -543,15 +543,15 @@ def main():
     if not all_holdings_df.empty:
         logging.info("\n" + "🎉" * 20)
         logging.info("📊 最终统计:")
-        logging.info(f"   总记录: {len(all_holdings_df):,}")
-        logging.info(f"   成功基金: {successful_funds}/{len(fund_list_to_crawl)}")
-        logging.info(f"   唯一股票: {all_holdings_df['股票代码'].nunique()}")
+        logging.info(f"    总记录: {len(all_holdings_df):,}")
+        logging.info(f"    成功基金: {successful_funds}/{len(fund_list_to_crawl)}")
+        logging.info(f"    唯一股票: {all_holdings_df['股票代码'].nunique()}")
         
         # 质量统计
         industry_coverage = (all_holdings_df['所属行业'] != '未知').mean()
         concept_coverage = (all_holdings_df['概念主题'] != '未知').mean()
-        logging.info(f"   行业覆盖率: {industry_coverage:.1%}")
-        logging.info(f"   概念覆盖率: {concept_coverage:.1%}")
+        logging.info(f"    行业覆盖率: {industry_coverage:.1%}")
+        logging.info(f"    概念覆盖率: {concept_coverage:.1%}")
         
         try:
             all_holdings_df.to_csv(output_filename, index=False, encoding='utf-8-sig')
@@ -563,7 +563,7 @@ def main():
         logging.warning("❌ 无数据生成")
         # 创建空文件
         empty_df = pd.DataFrame(columns=['基金代码', '年份', '股票代码', '股票名称', '所属行业', 
-                                        '概念主题', '持仓占比', '持股数', '市值', '报告日期'])
+                                         '概念主题', '持仓占比', '持股数', '市值', '报告日期'])
         empty_df.to_csv(output_filename, index=False, encoding='utf-8-sig')
 
 if __name__ == '__main__':
