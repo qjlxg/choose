@@ -40,7 +40,7 @@ class FundSignalCrawler:
         # 分割行
         lines = [line.strip() for line in table_content.split('\n') if line.strip()]
         
-        # 找到表头行（包含"基金代码"和"行动信号"）
+        # 找到表头行
         header_line = None
         for i, line in enumerate(lines):
             if '基金代码' in line and '行动信号' in line:
@@ -58,20 +58,19 @@ class FundSignalCrawler:
                 continue
                 
             # 清理 Markdown 表格格式
-            cells = [cell.strip() for cell in line.split('|')[1:-1]]  # 去掉首尾的空单元格
+            cells = [cell.strip() for cell in line.split('|')[1:-1]]
             
-            if len(cells) >= 8:  # 确保有足够的列
-                fund_code = cells[0].strip()  # 第一列：基金代码
-                action_signal = cells[7].strip()  # 最后一列：行动信号
+            if len(cells) >= 8:
+                fund_code = cells[0].strip()
+                action_signal = cells[7].strip()
                 
-                # 验证基金代码格式
-                if re.match(r'^\d{6}$', fund_code):
-                    if '买入' in action_signal:  # 包含"弱买入"或"强买入"
-                        fund_signals.append({
-                            'fund_code': fund_code,
-                            'signal': action_signal
-                        })
-                        print(f"   ✅ {fund_code}: {action_signal}")
+                # 验证基金代码和买入信号
+                if re.match(r'^\d{6}$', fund_code) and '买入' in action_signal:
+                    fund_signals.append({
+                        'fund_code': fund_code,
+                        'signal': action_signal
+                    })
+                    print(f"   ✅ {fund_code}: {action_signal}")
         
         fund_codes = [fs['fund_code'] for fs in fund_signals]
         print(f"📊 找到 {len(fund_signals)} 只买入信号基金: {fund_codes}")
@@ -79,21 +78,32 @@ class FundSignalCrawler:
         return fund_codes
     
     def extract_json_from_jsonp(self, text):
-        """提取并解析 JSONP"""
+        """提取并解析 JSONP（修复语法错误）"""
         try:
             # 匹配 var apidata = {...};
-            pattern = r'var\s+apidata\s*=\s*({.*?});?\s*$'
+            pattern = r'var\s+apidata\s*=\s*(\{.*?\});?\s*$'
             match = re.search(pattern, text, re.DOTALL)
             if match:
                 json_str = match.group(1)
-                # 处理单引号问题
-                json_str = re.sub(r"(\w+)'?": r'"\1":', json_str)
+                
+                # 修复：正确处理单引号和双引号
+                # 将单引号属性名转为双引号
+                json_str = re.sub(r"(\w+)'?\s*:", r'"\1":', json_str)
+                # 将单引号字符串值转为双引号
                 json_str = re.sub(r":\s*'([^']*)'?", r': "\1"', json_str)
                 # 清理转义字符
                 json_str = json_str.replace('\\"', '"').replace("\\'", "'")
+                # 清理 HTML 实体
+                json_str = json_str.replace('\\u003c', '<').replace('\\u003e', '>')
+                
+                print(f"🔍 解析JSON: {json_str[:100]}...")  # 调试信息
                 return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON解析失败: {e}")
+            print(f"🔍 原始响应: {text[:200]}...")
         except Exception as e:
-            print(f"JSON解析失败: {e}")
+            print(f"❌ 其他解析错误: {e}")
+        
         return None
     
     def get_fund_name(self, fund_code):
@@ -118,7 +128,7 @@ class FundSignalCrawler:
         params = {
             'type': 'jjcc', 
             'code': fund_code, 
-            'topline': '10',  # 前10只持仓
+            'topline': '10',
             'year': year
         }
         
@@ -135,12 +145,10 @@ class FundSignalCrawler:
             soup = BeautifulSoup(data['content'], 'html.parser')
             holdings = []
             
-            # 查找所有季度块
             boxes = soup.find_all('div', class_='box')
             print(f"      📊 找到 {len(boxes)} 个季度")
             
-            for box in boxes:
-                # 提取季度标题
+            for i, box in enumerate(boxes):
                 title = box.find('h4', class_='t')
                 if not title:
                     continue
@@ -153,28 +161,24 @@ class FundSignalCrawler:
                 year_str, quarter = quarter_match.groups()
                 quarter = int(quarter)
                 
-                # 提取报告日期
                 date_elem = title.find('font', class_='px12')
                 report_date = date_elem.get_text().strip() if date_elem else f"{year_str}Q{quarter}"
                 
-                # 查找表格
                 table = box.find('table', class_=re.compile(r'tzxq'))
                 if not table:
                     continue
                 
-                # 解析表格行
                 tbody = table.find('tbody')
                 if tbody:
                     rows = tbody.find_all('tr')
                 else:
-                    rows = table.find_all('tr')[1:]  # 跳过表头
+                    rows = table.find_all('tr')[1:]
                 
                 for row in rows:
                     cols = row.find_all('td')
                     if len(cols) < 7:
                         continue
                     
-                    # 提取股票代码
                     code_link = cols[1].find('a')
                     stock_code = ''
                     if code_link and code_link.get('href'):
@@ -186,7 +190,6 @@ class FundSignalCrawler:
                     if not stock_code or not stock_code.isdigit():
                         continue
                     
-                    # 提取持仓信息
                     holding = {
                         'fund_code': fund_code,
                         'year': year_str,
@@ -199,30 +202,25 @@ class FundSignalCrawler:
                         'market_value': cols[6].get_text().strip().replace(',', '')
                     }
                     
-                    # 数值清洗
                     holding['ratio_clean'] = float(holding['ratio'].replace('%', '')) if holding['ratio'] else 0
                     holding['market_value_clean'] = float(holding['market_value']) if holding['market_value'] else 0
                     holding['shares_clean'] = float(holding['shares']) if holding['shares'] else 0
                     
                     holdings.append(holding)
             
-            print(f"      ✅ {year}年: {len(holdings)} 条记录")
+            print(f"      ✅ {year}年: {len(holdings)} 条")
             return holdings
             
-        except requests.RequestException as e:
-            print(f"      ❌ 请求失败: {e}")
-            return []
         except Exception as e:
-            print(f"      ❌ 解析失败: {e}")
+            print(f"      ❌ {year}年失败: {e}")
             return []
     
     def crawl_fund(self, fund_code):
-        """爬取单只基金的持仓"""
-        print(f"\n📈 [{fund_code}] 正在爬取...")
+        """爬取单只基金"""
+        print(f"\n📈 [{fund_code}] 爬取中...")
         fund_name = self.get_fund_name(fund_code)
-        print(f"   📋 名称: {fund_name}")
+        print(f"   📋 {fund_name}")
         
-        # 优先尝试最近年份
         years_to_try = [2024, 2023, 2022]
         all_holdings = []
         
@@ -230,47 +228,43 @@ class FundSignalCrawler:
             year_holdings = self.crawl_year_holdings(fund_code, year)
             if year_holdings:
                 all_holdings.extend(year_holdings)
-                print(f"   🎯 {year}年成功: {len(year_holdings)} 条")
-                break  # 成功就停止尝试更早年份
-            time.sleep(0.5)  # 短暂延时
+                print(f"   🎯 {year}年: {len(year_holdings)} 条")
+                break
+            time.sleep(0.5)
         
         if not all_holdings:
-            print(f"   ❌ 无可用持仓数据")
+            print(f"   ❌ 无数据")
             return pd.DataFrame()
         
-        # 保存单基金数据
         df = pd.DataFrame(all_holdings)
         df['fund_name'] = fund_name
         
         os.makedirs('data', exist_ok=True)
-        safe_name = re.sub(r'[^\w\s-]', '', fund_name)[:20]  # 清理文件名
+        safe_name = re.sub(r'[^\w\s-]', '', fund_name)[:20]
         filename = f"data/{fund_code}_{safe_name}_买入信号.csv"
         df.to_csv(filename, index=False, encoding='utf-8-sig')
         
-        print(f"   💾 保存 {len(df)} 条 → {filename}")
-        
-        # 显示前5条预览
+        print(f"   💾 {len(df)} 条 → {filename}")
         preview_cols = ['year', 'quarter', 'stock_code', 'stock_name', 'ratio']
-        print(f"   📊 前5条:")
-        print(df[preview_cols].head().to_string(index=False))
+        print(f"   📊 前3条:\n{df[preview_cols].head(3).to_string(index=False)}")
         
         return df
 
 def main():
-    """主函数 - 直接运行"""
-    print("🚀 买入信号基金持仓分析工具")
-    print("=" * 60)
+    """主函数"""
+    print("🚀 买入信号基金持仓分析")
+    print("=" * 50)
     
     crawler = FundSignalCrawler()
     fund_codes = crawler.parse_signals_from_md()
     
     if not fund_codes:
-        print("❌ MD 文件中未找到弱买入/强买入信号的基金")
-        print("请检查 market_monitor_report.md 文件格式")
+        print("❌ 未找到买入信号基金")
+        print("检查 market_monitor_report.md 文件")
         return
     
-    print(f"\n🎯 目标: 爬取 {len(fund_codes)} 只买入信号基金")
-    print("-" * 60)
+    print(f"\n🎯 爬取 {len(fund_codes)} 只基金")
+    print("-" * 50)
     
     all_data = []
     success_count = 0
@@ -283,46 +277,28 @@ def main():
             all_data.append(df)
             success_count += 1
         
-        # 防反爬延时
         if i < len(fund_codes):
-            wait_time = np.random.uniform(2, 4)
-            print(f"   ⏳ 等待 {wait_time:.1f} 秒...")
-            time.sleep(wait_time)
+            wait = np.random.uniform(2, 4)
+            print(f"   ⏳ 等待 {wait:.1f}s...")
+            time.sleep(wait)
     
-    # 生成汇总报告
     if all_data:
-        combined_df = pd.concat(all_data, ignore_index=True)
-        
-        # 创建汇总文件名
+        combined = pd.concat(all_data, ignore_index=True)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-        summary_file = f"data/买入信号基金汇总_{timestamp}.csv"
-        combined_df.to_csv(summary_file, index=False, encoding='utf-8-sig')
+        summary_file = f"data/买入信号汇总_{timestamp}.csv"
+        combined.to_csv(summary_file, index=False, encoding='utf-8-sig')
         
-        print(f"\n🎉 任务完成！")
-        print(f"✅ 成功: {success_count}/{len(fund_codes)} 只基金")
-        print(f"📊 总持仓记录: {len(combined_df):,} 条")
-        print(f"💾 汇总文件: {summary_file}")
+        print(f"\n🎉 完成！")
+        print(f"✅ 成功: {success_count}/{len(fund_codes)}")
+        print(f"📊 总记录: {len(combined)}")
+        print(f"💾 汇总: {summary_file}")
         
-        # 生成统计报告
-        print(f"\n📈 买入信号基金统计:")
-        stats = combined_df.groupby(['fund_code', 'fund_name']).agg({
-            'stock_code': 'count',
-            'ratio_clean': ['sum', 'mean']
-        }).round(2)
-        stats.columns = ['持仓数量', '总占比(%)', '平均占比(%)']
-        print(stats.to_string())
-        
-        # 生成简单分析
-        print(f"\n💡 快速分析:")
-        total_funds = len(fund_codes)
-        avg_holdings = len(combined_df) / success_count if success_count > 0 else 0
-        print(f"   • 总基金数: {total_funds} 只")
-        print(f"   • 成功获取: {success_count} 只")
-        print(f"   • 平均每基金: {avg_holdings:.1f} 条持仓")
+        print("\n📈 统计:")
+        stats = combined.groupby('fund_code').size().reset_index(name='记录数')
+        print(stats.to_string(index=False))
         
     else:
-        print("\n❌ 没有成功获取任何基金数据")
-        print("可能原因: 网络问题、API变化、或基金无持仓数据")
+        print("\n❌ 无数据获取")
 
 if __name__ == "__main__":
     main()
