@@ -254,14 +254,30 @@ class FundDataCrawler:
                 if not match:
                     print(f"未在响应中找到基金 {fund_code} {year}年的数据")
                     continue
-                    
+                
+                # 提取数据字符串
                 api_data_str = match.group(1).strip()
                 
                 # 修复 JavaScript 格式以适应 JSON 解析
-                # 方案一：使用 ast.literal_eval
-                # 这是最安全的方案，因为它能处理非标准JSON格式（例如不带双引号的属性名）
-                # 注意：这里需要替换布尔值（`true`）和空值（`null`），因为 ast.literal_eval 不支持这些
-                api_data = ast.literal_eval(api_data_str.replace('content:', '"content":').replace('arryear:', '"arryear:"'))
+                # 1. 提取 content 字符串
+                content_match = re.search(r'content:"(.*?)"', api_data_str, re.DOTALL)
+                
+                if content_match:
+                    content_value = content_match.group(1)
+                    
+                    # 2. 手动转义 content 字符串中的特殊字符（换行和双引号）
+                    fixed_content_value = content_value.replace('"', '\\"').replace('\n', '\\n')
+                    
+                    # 3. 将修复后的 content 字符串重新插入原始字符串
+                    fixed_api_data_str = api_data_str.replace(content_match.group(0), f'content:"{fixed_content_value}"')
+                else:
+                    fixed_api_data_str = api_data_str
+
+                # 4. 替换其他未加引号的键名，使其符合 JSON 格式
+                json_str = fixed_api_data_str.replace('content:', '"content":').replace('arryear:', '"arryear":').replace('curyear:', '"curyear":')
+                
+                # 使用 json.loads 解析
+                api_data = json.loads(json_str)
                 
                 content = api_data.get('content', '')
                 
