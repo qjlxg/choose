@@ -1,8 +1,5 @@
-selenium
-lxml
 requests
 beautifulsoup4
 pandas
 numpy
-fake-useragent
-webdriver-manager
+lxml
