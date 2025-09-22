@@ -30,7 +30,6 @@ def load_stock_categories(category_path):
                 print(f"文件 {f} 缺少关键列 '股票代码' 或 '股票名称'，跳过。")
                 continue
             
-            # 清理股票代码列，确保没有多余的空格或特殊字符
             df['股票代码'] = df['股票代码'].astype(str).str.strip().str.zfill(6)
             
             for code in df['股票代码']:
@@ -90,11 +89,19 @@ def analyze_holdings():
                 df = pd.read_csv(f, engine='python')
                 
                 column_mapping = {
-                    '占净值 比例': '占净值比例', '持仓市值 （万元）': '持仓市值',
-                    '持仓市值': '持仓市值', '占净值比例': '占净值比例'
+                    '占净值 比例': '占净值比例', 
+                    '占净值比例': '占净值比例',
+                    '持仓市值 （万元）': '持仓市值',
+                    '持仓市值': '持仓市值',
+                    '市值': '持仓市值',
+                    '持仓市值 （万元人民币）': '持仓市值', # 新增的列名映射
+                    '股票名称': '股票名称',
+                    '股票代码': '股票代码',
+                    '季度': '季度'
                 }
-                df.rename(columns=column_mapping, inplace=True)
                 
+                df.columns = [column_mapping.get(col, col) for col in df.columns]
+
                 required_cols = ['股票代码', '股票名称', '占净值比例', '持仓市值', '季度']
                 missing_cols = [col for col in required_cols if col not in df.columns]
                 if missing_cols:
@@ -103,7 +110,6 @@ def analyze_holdings():
                 df['占净值比例'] = df['占净值比例'].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False)
                 df['占净值比例'] = pd.to_numeric(df['占净值比例'], errors='coerce')
                 
-                # 清理股票代码，确保没有空格
                 df['股票代码'] = df['股票代码'].astype(str).str.strip().str.zfill(6)
                 
                 if use_detailed_categories:
@@ -132,7 +138,6 @@ def analyze_holdings():
         report.append(f"## 基金代码: {fund_code} 持仓分析报告")
         report.append("---")
         
-        # 记录未被分类的股票
         unclassified_stocks = combined_df[combined_df['行业'] == '其他']
         if not unclassified_stocks.empty:
             report.append("\n### 未能匹配到行业分类的股票列表")
