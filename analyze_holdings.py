@@ -98,21 +98,22 @@ def generate_fund_report(df, fund_code, report):
                         report.append(f"  - **{name}** ({code}): **{action}**，比例从 {current_ratio:.2f}% 变为 {next_ratio:.2f}% (变化 {diff:+.2f}%)")
 
     report.append("\n### 2. 行业偏好和持仓集中度")
-    sector_summary = df.groupby(['年份', '行业'])['占净值比例'].sum().unstack().fillna(0)
+    sector_summary = df.groupby(['季度', '行业'])['占净值比例'].sum().unstack(fill_value=0)
+    
+    # 精简表格，只保留有数据的列
+    sector_summary = sector_summary.loc[:, (sector_summary != 0).any(axis=0)]
     
     sector_summary = sector_summary.astype(float)
     
     report.append("#### 行业偏好（占净值比例之和）")
-    report.append("| 年份 | 行业 | 占比 | 进度条 |")
+    report.append("| 季度 | 行业 | 占比 | 进度条 |")
     report.append("|---|---|---|---|")
-    for year, row in sector_summary.iterrows():
-        total_ratio = row.sum()
-        if total_ratio > 0:
-            sorted_sectors = row.sort_values(ascending=False)
-            for sector, ratio in sorted_sectors.items():
-                if ratio > 0:
-                    progress_bar = '█' * int(ratio / 5)
-                    report.append(f"| {year} | {sector} | {ratio:.2f}% | {progress_bar} |")
+    for quarter, row in sector_summary.iterrows():
+        sorted_sectors = row.sort_values(ascending=False)
+        for sector, ratio in sorted_sectors.items():
+            if ratio > 0:
+                progress_bar = '█' * int(ratio / 5)
+                report.append(f"| {quarter} | {sector} | {ratio:.2f}% | {progress_bar} |")
 
     concentration_summary = df.groupby('季度')['占净值比例'].sum()
     
@@ -122,6 +123,7 @@ def generate_fund_report(df, fund_code, report):
     for quarter, ratio in concentration_summary.items():
         progress_bar = '█' * int(ratio / 5)
         report.append(f"| {quarter} | {ratio:.2f}% | {progress_bar} |")
+
 
     report.append("\n### 3. 趋势总结和投资建议")
     report.append("> **免责声明**：本报告基于历史持仓数据进行分析，不构成任何投资建议。投资有风险，入市需谨慎。")
@@ -139,13 +141,13 @@ def generate_fund_report(df, fund_code, report):
         else:
             report.append("- **持仓集中度**：该基金的持仓集中度在分析期内相对**稳定**，可能反映其投资风格稳健。")
 
-    if len(sector_summary) > 1:
-        first_year_summary = sector_summary.iloc[0]
-        last_year_summary = sector_summary.iloc[-1]
+    if len(sector_summary.columns) > 1:
+        first_quarter_summary = sector_summary.iloc[0]
+        last_quarter_summary = sector_summary.iloc[-1]
         
         try:
-            first_dominant_sector = first_year_summary.idxmax()
-            last_dominant_sector = last_year_summary.idxmax()
+            first_dominant_sector = first_quarter_summary.idxmax()
+            last_dominant_sector = last_quarter_summary.idxmax()
             
             if first_dominant_sector != last_dominant_sector:
                 report.append(f"- **行业偏好**：基金的投资偏好发生了明显变化，从**{first_dominant_sector}**转向了**{last_dominant_sector}**。")
@@ -226,6 +228,9 @@ def analyze_holdings():
                 df['占净值比例'] = df['占净值比例'].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False)
                 df['占净值比例'] = pd.to_numeric(df['占净值比例'], errors='coerce')
                 
+                df['持仓市值'] = df['持仓市值'].astype(str).str.replace(',', '', regex=False)
+                df['持仓市值'] = pd.to_numeric(df['持仓市值'], errors='coerce')
+                
                 df['股票代码'] = df['股票代码'].astype(str).str.strip().str.zfill(6)
                 
                 if use_detailed_categories:
@@ -261,11 +266,27 @@ def analyze_holdings():
     report.append("# 所有基金持仓总览")
     report.append("---")
     report.append("### 整体行业偏好")
-    overall_sector_summary = all_funds_combined_df.groupby(['年份', '行业'])['占净值比例'].sum().unstack().fillna(0)
-    report.append(overall_sector_summary.to_markdown())
+    
+    # 逻辑优化：按季度汇总所有基金的持仓市值，再计算占比
+    overall_sector_summary = all_funds_combined_df.groupby(['季度', '行业'])['持仓市值'].sum().unstack(fill_value=0)
+    
+    report.append("#### 整体行业偏好（按持仓市值汇总占比）")
+    report.append("| 季度 | 行业 | 占比 | 进度条 |")
+    report.append("|---|---|---|---|")
+    for quarter, row in overall_sector_summary.iterrows():
+        total_market_value = row.sum()
+        if total_market_value > 0:
+            sorted_sectors = row.sort_values(ascending=False)
+            for sector, market_value in sorted_sectors.items():
+                if market_value > 0:
+                    ratio = (market_value / total_market_value) * 100
+                    progress_bar = '█' * int(ratio / 5)
+                    report.append(f"| {quarter} | {sector} | {ratio:.2f}% | {progress_bar} |")
+
 
     report.append("\n### 整体持仓集中度")
-    overall_concentration_summary = all_funds_combined_df.groupby('季度')['占净值比例'].sum()
+    overall_concentration_summary = all_funds_combined_df.groupby('季度')['持仓市值'].sum()
+    report.append("#### 所有基金持仓市值汇总（万元人民币）")
     report.append(overall_concentration_summary.to_markdown())
     
     report.append("\n---")
