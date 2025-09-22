@@ -113,16 +113,21 @@ def analyze_holdings():
             try:
                 df = pd.read_csv(f, engine='python')
                 
-                # 检查并重命名列，以处理不同文件中的列名差异
+                # 扩展列名映射，以处理更多变体
                 column_mapping = {
                     '占净值 比例': '占净值比例',
-                    '持仓市值 （万元）': '持仓市值'
+                    '持仓市值 （万元）': '持仓市值',
+                    '持仓市值': '持仓市值',
+                    '占净值比例': '占净值比例'
                 }
                 df.rename(columns=column_mapping, inplace=True)
-
-                if '最新价' in df.columns:
-                    df = df.loc[:, ['序号', '股票代码', '股票名称', '相关资讯', '占净值比例', '持股数 （万股）', '持仓市值', '季度']]
                 
+                # 确保关键列存在，并进行清理
+                required_cols = ['股票代码', '股票名称', '占净值比例', '持仓市值', '季度']
+                missing_cols = [col for col in required_cols if col not in df.columns]
+                if missing_cols:
+                    raise KeyError(f"缺少关键列 {missing_cols}")
+
                 # 新增步骤：在转换前清理'占净值比例'列
                 # 移除百分号
                 df['占净值比例'] = df['占净值比例'].astype(str).str.replace('%', '', regex=False)
