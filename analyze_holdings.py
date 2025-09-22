@@ -187,7 +187,6 @@ def analyze_holdings():
 
         report.append("\n### 3. 趋势总结和投资建议")
         report.append("> **免责声明**：本报告基于历史持仓数据进行分析，不构成任何投资建议。投资有风险，入市需谨慎。")
-        report.append(f"\n基于对基金 **{fund_code}** 的历史持仓数据分析，本报告得出以下关键观察结果：")
         
         if len(concentration_summary) > 1:
             first_concentration = concentration_summary.iloc[0]
