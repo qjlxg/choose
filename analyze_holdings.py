@@ -47,7 +47,7 @@ def generate_fund_report(df, fund_code, report):
     report.append(f"## 基金代码: {fund_code} 持仓分析报告")
     report.append("---")
     
-    unclassified_stocks = df[df['行业'] == '其他']
+    unclassified_stocks = df[df['行业'].str.contains('未分类')]
     if not unclassified_stocks.empty:
         report.append("\n### 未能匹配到行业分类的股票列表")
         report.append("---")
@@ -100,20 +100,22 @@ def generate_fund_report(df, fund_code, report):
     report.append("\n### 2. 行业偏好和持仓集中度")
     sector_summary = df.groupby(['季度', '行业'])['占净值比例'].sum().unstack(fill_value=0)
     
-    # 精简表格，只保留有数据的列
+    sector_summary = sector_summary.loc[:, ~sector_summary.columns.str.contains('未分类')]
     sector_summary = sector_summary.loc[:, (sector_summary != 0).any(axis=0)]
-    
     sector_summary = sector_summary.astype(float)
     
     report.append("#### 行业偏好（占净值比例之和）")
-    report.append("| 季度 | 行业 | 占比 | 进度条 |")
-    report.append("|---|---|---|---|")
-    for quarter, row in sector_summary.iterrows():
-        sorted_sectors = row.sort_values(ascending=False)
-        for sector, ratio in sorted_sectors.items():
-            if ratio > 0:
-                progress_bar = '█' * int(ratio / 5)
-                report.append(f"| {quarter} | {sector} | {ratio:.2f}% | {progress_bar} |")
+    if not sector_summary.empty:
+        report.append("| 季度 | 行业 | 占比 | 进度条 |")
+        report.append("|---|---|---|---|")
+        for quarter, row in sector_summary.iterrows():
+            sorted_sectors = row.sort_values(ascending=False)
+            for sector, ratio in sorted_sectors.items():
+                if ratio > 0:
+                    progress_bar = '█' * int(ratio / 5)
+                    report.append(f"| {quarter} | {sector} | {ratio:.2f}% | {progress_bar} |")
+    else:
+        report.append("无行业偏好数据可供分析。")
 
     concentration_summary = df.groupby('季度')['占净值比例'].sum()
     
@@ -141,7 +143,7 @@ def generate_fund_report(df, fund_code, report):
         else:
             report.append("- **持仓集中度**：该基金的持仓集中度在分析期内相对**稳定**，可能反映其投资风格稳健。")
 
-    if len(sector_summary.columns) > 1:
+    if not sector_summary.empty and len(sector_summary.index) > 1:
         first_quarter_summary = sector_summary.iloc[0]
         last_quarter_summary = sector_summary.iloc[-1]
         
@@ -234,9 +236,9 @@ def analyze_holdings():
                 df['股票代码'] = df['股票代码'].astype(str).str.strip().str.zfill(6)
                 
                 if use_detailed_categories:
-                    df['行业'] = df['股票代码'].map(stock_categories).fillna('其他')
+                    df['行业'] = df['股票代码'].map(stock_categories).fillna('未分类')
                 else:
-                    df['行业'] = df['股票代码'].astype(str).str[:3].map(sector_mapping).fillna('其他')
+                    df['行业'] = df['股票代码'].astype(str).str[:3].map(sector_mapping).fillna('未分类')
                 
                 df['基金代码'] = fund_code
                 df_list.append(df)
@@ -267,10 +269,15 @@ def analyze_holdings():
     report.append("---")
     report.append("### 整体行业偏好")
     
-    # 逻辑优化：按季度汇总所有基金的持仓市值，再计算占比
-    overall_sector_summary = all_funds_combined_df.groupby(['季度', '行业'])['持仓市值'].sum().unstack(fill_value=0)
+    # 逻辑优化：去重并按季度汇总所有股票的持仓市值，再计算占比
+    unique_holdings = all_funds_combined_df.groupby(['股票代码', '股票名称', '行业', '季度'])['持仓市值'].sum().reset_index()
+
+    overall_sector_summary = unique_holdings.groupby(['季度', '行业'])['持仓市值'].sum().unstack(fill_value=0)
     
-    report.append("#### 整体行业偏好（按持仓市值汇总占比）")
+    # 过滤掉未分类的股票，只进行有意义的分析
+    overall_sector_summary = overall_sector_summary.loc[:, ~overall_sector_summary.columns.str.contains('未分类')]
+
+    report.append("#### 整体行业偏好（按独立股票持仓市值汇总占比）")
     report.append("| 季度 | 行业 | 占比 | 进度条 |")
     report.append("|---|---|---|---|")
     for quarter, row in overall_sector_summary.iterrows():
@@ -283,11 +290,13 @@ def analyze_holdings():
                     progress_bar = '█' * int(ratio / 5)
                     report.append(f"| {quarter} | {sector} | {ratio:.2f}% | {progress_bar} |")
 
-
-    report.append("\n### 整体持仓集中度")
-    overall_concentration_summary = all_funds_combined_df.groupby('季度')['持仓市值'].sum()
-    report.append("#### 所有基金持仓市值汇总（万元人民币）")
-    report.append(overall_concentration_summary.to_markdown())
+    # 汇总未分类股票
+    unclassified_overall = all_funds_combined_df[all_funds_combined_df['行业'].str.contains('未分类')]
+    if not unclassified_overall.empty:
+        report.append("\n### 未分类股票列表（按总市值汇总）")
+        report.append("---")
+        unclassified_summary = unclassified_overall.groupby(['股票代码', '股票名称'])['持仓市值'].sum().sort_values(ascending=False).reset_index()
+        report.append(unclassified_summary.to_markdown(index=False))
     
     report.append("\n---")
 
