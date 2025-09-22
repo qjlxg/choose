@@ -27,17 +27,157 @@ DATA_DIR = 'fund_data'
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
+class FundAllocator:
+    """资金分配建议类"""
+    
+    @staticmethod
+    def calculate_allocation_score(row):
+        """计算基金的分配权重得分（0-100分）"""
+        score = 0
+        
+        # 1. 行动信号权重 (40分)
+        action_map = {
+            "强烈强买入": 40, "强买入": 35, "弱买入": 25,
+            "持有/观察": 15, "弱卖出/规避": 5, "强卖出/规避": 0, "N/A": 0
+        }
+        score += action_map.get(row['行动信号'], 0)
+        
+        # 2. RSI得分 (20分) - 越低越好（超卖机会）
+        rsi = pd.to_numeric(row['RSI'], errors='coerce')
+        if not pd.isna(rsi):
+            if rsi < 30:
+                score += 20
+            elif rsi < 40:
+                score += 15
+            elif rsi < 50:
+                score += 10
+            else:
+                score += 5
+        
+        # 3. 净值/MA50得分 (15分) - 越接近1越好（在均线附近）
+        ma_ratio = pd.to_numeric(row['净值/MA50'], errors='coerce')
+        if not pd.isna(ma_ratio):
+            if 0.95 <= ma_ratio <= 1.05:
+                score += 15
+            elif 0.9 <= ma_ratio <= 1.1:
+                score += 10
+            elif 0.85 <= ma_ratio <= 1.15:
+                score += 5
+        
+        # 4. MACD信号 (15分)
+        if '金叉' in str(row['MACD信号']):
+            score += 15
+        elif '死叉' in str(row['MACD信号']):
+            score -= 5  # 死叉扣分
+        
+        # 5. 布林带位置 (10分) - 下轨附近机会更大
+        bb_pos = str(row['布林带位置'])
+        if '下轨' in bb_pos:
+            score += 10
+        elif '中轨' in bb_pos:
+            score += 5
+        
+        # 确保得分在0-100之间
+        return max(0, min(100, score))
+    
+    @staticmethod
+    def suggest_portfolio(filtered_df, total_budget=5000, max_positions=3):
+        """建议投资组合"""
+        # 计算分配得分
+        filtered_df['分配得分'] = filtered_df.apply(FundAllocator.calculate_allocation_score, axis=1)
+        
+        # 按得分排序
+        scored_df = filtered_df.sort_values('分配得分', ascending=False)
+        
+        # 选择前N个（考虑资金限制）
+        n_positions = min(max_positions, len(scored_df))
+        selected_funds = scored_df.head(n_positions).copy()
+        
+        # 计算每只基金的建议金额
+        total_score = selected_funds['分配得分'].sum()
+        if total_score > 0:
+            selected_funds['建议权重'] = (selected_funds['分配得分'] / total_score * 100).round(1)
+            selected_funds['建议金额'] = (selected_funds['建议权重'] / 100 * total_budget).round(0)
+        else:
+            selected_funds['建议权重'] = 0
+            selected_funds['建议金额'] = 0
+        
+        return scored_df, selected_funds
+    
+    @staticmethod
+    def generate_allocation_report(selected_funds, total_budget):
+        """生成资金分配报告"""
+        report_lines = []
+        report_lines.append("\n## 💰 资金分配建议")
+        report_lines.append(f"**总投资预算**: {total_budget:,} 元")
+        report_lines.append(f"**建议仓位数**: {len(selected_funds)} 只基金")
+        report_lines.append("\n| 基金代码 | 分配得分 | 建议权重 | 建议金额 | 行动信号 | 投资理由 |")
+        report_lines.append("|----|----|----|----|----|----|")
+        
+        for _, row in selected_funds.iterrows():
+            amount = f"{row['建议金额']:,}"
+            weight = f"{row['建议权重']}%"
+            score = f"{row['分配得分']:.0f}"
+            signal = row['行动信号']
+            reason = FundAllocator._get_investment_reason(row)
+            
+            report_lines.append(f"| {row['基金代码']} | {score} | {weight} | {amount}元 | {signal} | {reason} |")
+        
+        # 总计验证
+        total_amount = selected_funds['建议金额'].sum()
+        report_lines.append(f"\n**总计**: {total_amount:,.0f}元 ({(total_amount/total_budget*100):.1f}% 预算使用率)")
+        
+        if total_amount < total_budget * 0.9:
+            report_lines.append("\n**💡 建议**: 当前建议仓位使用率较低，可考虑:")
+            report_lines.append("- 增加仓位数量（分散风险）")
+            report_lines.append("- 等待更多买入信号")
+            report_lines.append("- 调整投资预算")
+        elif total_amount > total_budget * 1.1:
+            report_lines.append("\n**⚠️ 提醒**: 建议金额超出预算，建议按比例缩减")
+        
+        return report_lines
+    
+    @staticmethod
+    def _get_investment_reason(row):
+        """生成投资理由摘要"""
+        reasons = []
+        
+        # RSI理由
+        rsi = pd.to_numeric(row['RSI'], errors='coerce')
+        if not pd.isna(rsi):
+            if rsi < 30:
+                reasons.append("RSI超卖")
+            elif rsi < 40:
+                reasons.append("RSI低位")
+        
+        # 均线理由
+        ma_ratio = pd.to_numeric(row['净值/MA50'], errors='coerce')
+        if not pd.isna(ma_ratio) and 0.95 <= ma_ratio <= 1.05:
+            reasons.append("贴近均线")
+        
+        # MACD理由
+        if '金叉' in str(row['MACD信号']):
+            reasons.append("MACD金叉")
+        
+        # 布林带理由
+        if '下轨' in str(row['布林带位置']):
+            reasons.append("布林下轨")
+        elif '中轨' in str(row['布林带位置']):
+            reasons.append("布林中轨")
+        
+        return "、".join(reasons) if reasons else "综合技术指标"
+
 class MarketMonitor:
     def __init__(self, report_file='analysis_report.md', output_file='market_monitor_report.md', filter_mode='all', rsi_threshold=None, holdings=None):
         self.report_file = report_file
         self.output_file = output_file
-        self.filter_mode = filter_mode # 'all', 'strong_buy', 'low_rsi_buy'
-        self.rsi_threshold = rsi_threshold # e.g., 40, only for low_rsi_buy
-        self.holdings = holdings or [] # List of held fund codes, for prioritization
+        self.filter_mode = filter_mode  # 'all', 'strong_buy', 'low_rsi_buy'
+        self.rsi_threshold = rsi_threshold  # e.g., 40, only for low_rsi_buy
+        self.holdings = holdings or []  # List of held fund codes, for prioritization
         self.fund_codes = []
         self.fund_data = {}
-        self.index_data = pd.DataFrame() # 大盘数据
-        self.index_indicators = None # 大盘指标
+        self.index_data = pd.DataFrame()  # 大盘数据
+        self.index_indicators = None  # 大盘指标
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36'
         }
@@ -99,13 +239,14 @@ class MarketMonitor:
         logger.info("正在解析 %s 获取推荐基金代码...", report_path)
         if not os.path.exists(report_path):
             logger.error("报告文件 %s 不存在", report_path)
-            raise FileNotFoundError(f"{report_path} 不存在")
+            # 如果分析报告不存在，尝试加载你的买入信号CSV
+            return self._parse_buy_signals_csv()
         
         try:
             with open(report_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
-            pattern = re.compile(r'(?:^\| +(\d{6})|### 基金代码: (\d{6}))', re.M)
+            pattern = re.compile(r'(?:^\| +(\d{6})|### 基金 (\d{6}))', re.M)
             matches = pattern.findall(content)
 
             extracted_codes = set()
@@ -118,12 +259,35 @@ class MarketMonitor:
             
             if not self.fund_codes:
                 logger.warning("未提取到任何有效基金代码，请检查 analysis_report.md")
+                # 尝试加载CSV作为备选
+                self._parse_buy_signals_csv()
             else:
-                logger.info("提取到 %d 个基金（测试限制前1000个）: %s", len(self.fund_codes), self.fund_codes)
+                logger.info("提取到 %d 个基金（测试限制前1000个）: %s", len(self.fund_codes), self.fund_codes[:5])
             
         except Exception as e:
             logger.error("解析报告文件失败: %s", e)
-            raise
+            # 备选方案：尝试CSV
+            self._parse_buy_signals_csv()
+
+    def _parse_buy_signals_csv(self, csv_file="买入信号基金_20250922.csv"):
+        """从买入信号CSV文件解析基金代码"""
+        logger.info("尝试从买入信号CSV文件解析基金代码: %s", csv_file)
+        if not os.path.exists(csv_file):
+            logger.error("买入信号文件 %s 不存在", csv_file)
+            return False
+        
+        try:
+            df = pd.read_csv(csv_file)
+            if 'fund_code' in df.columns:
+                self.fund_codes = df['fund_code'].astype(str).str.zfill(6).tolist()
+                logger.info("从CSV文件提取到 %d 个强买入基金: %s", len(self.fund_codes), self.fund_codes)
+                return True
+            else:
+                logger.warning("CSV文件缺少 'fund_code' 列")
+                return False
+        except Exception as e:
+            logger.error("解析CSV文件失败: %s", e)
+            return False
 
     def _read_local_data(self, fund_code):
         """读取本地文件，如果存在则返回DataFrame"""
@@ -224,7 +388,7 @@ class MarketMonitor:
                     break
                 
                 page_index += 1
-                time_module.sleep(random.uniform(1, 2)) # 延长sleep到1-2秒，减少限速风险
+                time_module.sleep(random.uniform(1, 2))  # 延长sleep到1-2秒，减少限速风险
                 
             except requests.exceptions.RequestException as e:
                 logger.error("基金 %s API请求失败: %s", fund_code, str(e))
@@ -307,19 +471,19 @@ class MarketMonitor:
                 if market_trend == "弱势":
                     advice = "强烈等待回调"
             elif (not np.isnan(latest_rsi) and latest_rsi < 30) or \
-                  (not np.isnan(latest_bb_lower) and latest_net_value < latest_bb_lower) or \
-                  (not np.isnan(latest_ma50_ratio) and latest_ma50_ratio < 0.8):
+                 (not np.isnan(latest_bb_lower) and latest_net_value < latest_bb_lower) or \
+                 (not np.isnan(latest_ma50_ratio) and latest_ma50_ratio < 0.8):
                 advice = "可分批买入"
                 # 如果大盘强势，加强买入
                 if market_trend == "强势":
                     advice = "强烈分批买入"
             elif (not np.isnan(latest_ma50_ratio) and latest_ma50_ratio > 1) and \
-                  (not np.isnan(latest_macd_diff) and latest_macd_diff > 0):
+                 (not np.isnan(latest_macd_diff) and latest_macd_diff > 0):
                 advice = "可分批买入"
                 if market_trend == "强势":
                     advice = "强烈分批买入"
             elif (not np.isnan(latest_ma50_ratio) and latest_ma50_ratio < 1) and \
-                  (not np.isnan(latest_macd_diff) and latest_macd_diff < 0):
+                 (not np.isnan(latest_macd_diff) and latest_macd_diff < 0):
                 advice = "等待回调"
                 if market_trend == "弱势":
                     advice = "强烈等待回调"
@@ -330,26 +494,26 @@ class MarketMonitor:
                 if market_trend == "弱势":
                     action_signal = "强烈强卖出/规避"
             elif (not np.isnan(latest_rsi) and latest_rsi > 70) and \
-                  (not np.isnan(latest_ma50_ratio) and latest_ma50_ratio > 1.2) and \
-                  (not np.isnan(latest_macd_diff) and latest_macd_diff < 0):
+                 (not np.isnan(latest_ma50_ratio) and latest_ma50_ratio > 1.2) and \
+                 (not np.isnan(latest_macd_diff) and latest_macd_diff < 0):
                 action_signal = "强卖出/规避"
                 if market_trend == "弱势":
                     action_signal = "强烈强卖出/规避"
             elif (not np.isnan(latest_rsi) and latest_rsi > 65) or \
-                  (not np.isnan(latest_bb_upper) and latest_net_value > latest_bb_upper) or \
-                  (not np.isnan(latest_ma50_ratio) and latest_ma50_ratio > 1.2):
+                 (not np.isnan(latest_bb_upper) and latest_net_value > latest_bb_upper) or \
+                 (not np.isnan(latest_ma50_ratio) and latest_ma50_ratio > 1.2):
                 action_signal = "弱卖出/规避"
                 if market_trend == "弱势":
                     action_signal = "强卖出/规避"
             elif (not np.isnan(latest_rsi) and latest_rsi < 35) and \
-                  (not np.isnan(latest_ma50_ratio) and latest_ma50_ratio < 0.9) and \
-                  (not np.isnan(latest_macd_diff) and latest_macd_diff > 0):
+                 (not np.isnan(latest_ma50_ratio) and latest_ma50_ratio < 0.9) and \
+                 (not np.isnan(latest_macd_diff) and latest_macd_diff > 0):
                 action_signal = "强买入"
                 if market_trend == "强势":
                     action_signal = "强烈强买入"
             elif (not np.isnan(latest_rsi) and latest_rsi < 45) or \
-                  (not np.isnan(latest_bb_lower) and latest_net_value < latest_bb_lower) or \
-                  (not np.isnan(latest_ma50_ratio) and latest_ma50_ratio < 1):
+                 (not np.isnan(latest_bb_lower) and latest_net_value < latest_bb_lower) or \
+                 (not np.isnan(latest_ma50_ratio) and latest_ma50_ratio < 1):
                 action_signal = "弱买入"
                 if market_trend == "强势":
                     action_signal = "强买入"
@@ -397,7 +561,7 @@ class MarketMonitor:
         logger.info("开始预加载本地缓存数据...")
         fund_codes_to_fetch = []
         expected_latest_date = self._get_expected_latest_date()
-        min_data_points = 26 # 确保有足够数据计算技术指标
+        min_data_points = 26  # 确保有足够数据计算技术指标
 
         for fund_code in self.fund_codes:
             local_df = self._read_local_data(fund_code)
@@ -409,16 +573,16 @@ class MarketMonitor:
                 # 检查数据是否最新且完整
                 if latest_local_date >= expected_latest_date and data_points >= min_data_points:
                     logger.info("基金 %s 的本地数据已是最新 (%s, 期望: %s) 且数据量足够 (%d 行)，直接加载。",
-                                fund_code, latest_local_date, expected_latest_date, data_points)
+                                 fund_code, latest_local_date, expected_latest_date, data_points)
                     self.fund_data[fund_code] = self._get_latest_signals(fund_code, local_df.tail(100))
                     continue
                 else:
                     if latest_local_date < expected_latest_date:
                         logger.info("基金 %s 本地数据已过时（最新日期为 %s，期望 %s），需要从网络获取新数据。",
-                                    fund_code, latest_local_date, expected_latest_date)
+                                     fund_code, latest_local_date, expected_latest_date)
                     if data_points < min_data_points:
                         logger.info("基金 %s 本地数据量不足（仅 %d 行，需至少 %d 行），需要从网络获取。",
-                                    fund_code, data_points, min_data_points)
+                                     fund_code, data_points, min_data_points)
             else:
                 logger.info("基金 %s 本地数据不存在，需要从网络获取。", fund_code)
             
@@ -445,10 +609,44 @@ class MarketMonitor:
         else:
             logger.info("所有基金数据均来自本地缓存，无需网络下载。")
         
+        # 额外处理：如果是从CSV加载的，直接使用CSV数据
+        if not fund_codes_to_fetch and not any(fund_code in self.fund_data for fund_code in self.fund_codes):
+            self._load_csv_data_directly()
+        
         if len(self.fund_data) > 0:
             logger.info("所有基金数据处理完成。")
         else:
             logger.error("所有基金数据均获取失败。")
+
+    def _load_csv_data_directly(self):
+        """直接从CSV加载数据作为备选方案"""
+        csv_file = "买入信号基金_20250922.csv"
+        if os.path.exists(csv_file):
+            try:
+                df_csv = pd.read_csv(csv_file)
+                logger.info("成功加载买入信号CSV，包含 %d 只基金", len(df_csv))
+                
+                # 将CSV数据转换为我们的格式
+                for _, row in df_csv.iterrows():
+                    fund_code = str(row['fund_code']).zfill(6)
+                    self.fund_data[fund_code] = {
+                        'fund_code': fund_code,
+                        'latest_net_value': row['最新净值'],
+                        'rsi': row['RSI'],
+                        'ma_ratio': row['净值/MA50'],
+                        'macd_diff': 0 if row['MACD信号'] == '死叉' else 1,  # 简化处理
+                        'bb_upper': row['最新净值'] * 1.05 if row['布林带位置'] == '上轨上方' else None,
+                        'bb_lower': row['最新净值'] * 0.95 if row['布林带位置'] == '下轨下方' else None,
+                        'advice': row['投资建议'],
+                        'action_signal': row['行动信号'],
+                        'market_trend': self._get_index_market_trend()
+                    }
+                
+                self.fund_codes = df_csv['fund_code'].astype(str).str.zfill(6).tolist()
+                logger.info("CSV数据转换完成，共 %d 只基金", len(self.fund_codes))
+                
+            except Exception as e:
+                logger.error("直接加载CSV数据失败: %s", e)
 
     def _process_single_fund(self, fund_code):
         """处理单个基金数据：读取本地，下载增量，合并，保存，并计算信号"""
@@ -470,11 +668,12 @@ class MarketMonitor:
             logger.error("基金 %s 未获取到任何有效数据，且本地无缓存", fund_code)
             return None
 
-    def generate_report(self, top_n=5):
-        """生成市场情绪与技术指标监控报告，并筛选出Top N个推荐基金"""
-        logger.info(f"正在生成市场监控报告，并筛选出Top {top_n}个基金...")
+    def generate_report(self):
+        """生成市场情绪与技术指标监控报告"""
+        logger.info("正在生成市场监控报告...")
         report_df_list = []
         market_trend = self._get_index_market_trend()
+        
         for fund_code in self.fund_codes:
             data = self.fund_data.get(fund_code)
             if data is not None:
@@ -486,7 +685,7 @@ class MarketMonitor:
                 if isinstance(data['macd_diff'], (float, int)) and not np.isnan(data['macd_diff']):
                     macd_signal = "金叉" if data['macd_diff'] > 0 else "死叉"
                 
-                bollinger_pos = "中轨" # 默认中轨
+                bollinger_pos = "中轨"  # 默认中轨
                 if isinstance(data['latest_net_value'], (float, int)):
                     if isinstance(data['bb_upper'], (float, int)) and not np.isnan(data['bb_upper']) and data['latest_net_value'] > data['bb_upper']:
                         bollinger_pos = "上轨上方"
@@ -565,24 +764,23 @@ class MarketMonitor:
 
         # 按照您的新排序规则进行排序
         filtered_df = filtered_df.sort_values(
-            by=['sort_order_action', 'RSI', 'sort_order_advice'],
-            ascending=[True, True, True] # 优先按行动信号、其次按RSI从低到高、最后按投资建议排序
+            by=['sort_order_action', 'sort_order_advice', 'RSI'],
+            ascending=[True, True, True] # 优先按行动信号、其次按投资建议、最后按RSI从低到高排序
         ).drop(columns=['sort_order_action', 'sort_order_advice'])
 
-        # 新增：筛选出 Top N
-        top_n_df = filtered_df[filtered_df['行动信号'].str.contains('买入', na=False)].head(top_n)
-        
         # 将浮点数格式化为字符串，方便Markdown输出
         filtered_df['最新净值'] = filtered_df['最新净值'].apply(lambda x: f"{x:.4f}" if not pd.isna(x) else "N/A")
         filtered_df['RSI'] = filtered_df['RSI'].apply(lambda x: f"{x:.2f}" if not pd.isna(x) else "N/A")
         filtered_df['净值/MA50'] = filtered_df['净值/MA50'].apply(lambda x: f"{x:.2f}" if not pd.isna(x) else "N/A")
-        
-        top_n_df['最新净值'] = top_n_df['最新净值'].apply(lambda x: f"{x:.4f}" if not pd.isna(x) else "N/A")
-        top_n_df['RSI'] = top_n_df['RSI'].apply(lambda x: f"{x:.2f}" if not pd.isna(x) else "N/A")
-        top_n_df['净值/MA50'] = top_n_df['净值/MA50'].apply(lambda x: f"{x:.2f}" if not pd.isna(x) else "N/A")
-        
-        markdown_table_all = filtered_df.to_markdown(index=False)
-        markdown_table_top_n = top_n_df.to_markdown(index=False)
+
+        # 新增：生成资金分配建议
+        total_budget = 5000  # 固定为5000元预算
+        max_positions = 3    # 固定为3只基金
+        scored_df, selected_funds = FundAllocator.suggest_portfolio(filtered_df, total_budget, max_positions)
+        allocation_report = FundAllocator.generate_allocation_report(selected_funds, total_budget)
+
+        # 将上述排序后的 DataFrame 转换为 Markdown
+        markdown_table = filtered_df.to_markdown(index=False)
         
         with open(self.output_file, 'w', encoding='utf-8') as f:
             f.write(f"# 市场情绪与技术指标监控报告\n\n")
@@ -590,43 +788,52 @@ class MarketMonitor:
             f.write(f"## 大盘趋势分析\n")
             f.write(f"大盘（沪深300）当前趋势: **{market_trend}**\n")
             f.write(f"**说明：** 决策已结合大盘趋势调整，例如大盘强势时加强买入信号。\n\n")
-            
             if self.holdings:
                 f.write(f"**持仓基金优先显示**：{', '.join(self.holdings)}\n\n")
             if self.filter_mode != 'all':
                 f.write(f"**过滤模式**：{self.filter_mode} (RSI阈值: {self.rsi_threshold if self.rsi_threshold else 'N/A'})\n\n")
-                
-            f.write(f"## **推荐买入基金 (Top {len(top_n_df)})**\n")
-            f.write("此表格已筛选出当前最符合买入条件的Top基金，可作为你的首选投资目标。\n\n")
-            f.write(markdown_table_top_n)
-            
-            f.write(f"\n\n## **所有基金技术指标 (共{len(filtered_df)}只)**\n")
-            f.write("此表格已按**行动信号优先级**排序，'买入'信号基金在前。\n")
+            f.write(f"## 推荐基金技术指标 (处理基金数: {len(filtered_df)} / 原始{len(report_df)})\n")
+            f.write("此表格已按**行动信号优先级**排序，'强买入'基金将排在最前面。\n")
             f.write("**注意：** 当'行动信号'和'投资建议'冲突时，请以**行动信号**为准，其条件更严格，更适合机械化决策。\n\n")
-            f.write(markdown_table_all)
+            f.write(markdown_table)
             
-        logger.info("报告生成完成: %s (过滤后基金数: %d)", self.output_file, len(filtered_df))
+            # 添加资金分配建议
+            f.write("\n".join(allocation_report))
+            f.write("\n\n")
+            
+            f.write("## 📋 操作建议\n")
+            f.write("""
+### 1. **立即行动** (高优先级)
+- 按建议金额分批建仓前3只基金
+- 建议单笔投资不超过总预算的30%
+
+### 2. **风险控制**
+- 设置止损线：买入后跌破MA50时减仓
+- 动态调整：每周复盘技术信号变化
+
+### 3. **资金管理**
+- 保持现金储备20-30%用于后续机会
+- 避免追高，关注RSI<40的低位买入机会
+
+**⚠️ 免责声明**: 本报告仅供参考，不构成投资建议。投资有风险，入市需谨慎。
+            """)
+        
+        logger.info("报告生成完成: %s (过滤后基金数: %d, 建议仓位: %d只)", self.output_file, len(filtered_df), len(selected_funds))
 
 
 if __name__ == "__main__":
     try:
         logger.info("脚本启动")
-        # 示例：运行脚本，并只在报告中显示3个最推荐买入的基金
-        # monitor = MarketMonitor()
-        # monitor.get_fund_data()
-        # monitor.generate_report(top_n=3)
-        
-        # 示例：筛选出RSI低于45的弱买入基金
-        # monitor = MarketMonitor(filter_mode='low_rsi_buy', rsi_threshold=45)
-        # monitor.get_fund_data()
-        # monitor.generate_report()
-        
-        # 默认模式，显示所有基金，但报告会高亮显示推荐买入的Top 5
-        monitor = MarketMonitor()
+        # 示例：使用过滤模式，只显示强买入，预算5000元，最多3只仓位
+        monitor = MarketMonitor(
+            filter_mode='strong_buy', 
+            holdings=['005118']  # 如果你已有持仓
+        )
         monitor.get_fund_data()
-        monitor.generate_report(top_n=5)
-
+        monitor.generate_report()
         logger.info("脚本执行完成")
+        print(f"\n💰 基于5000元预算，建议投资3只基金")
+        print("📄 详细分配方案请查看 market_monitor_report.md")
     except Exception as e:
         logger.error("脚本运行失败: %s", e, exc_info=True)
         raise
