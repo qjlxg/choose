@@ -1,6 +1,18 @@
 import pandas as pd
 import glob
 import os
+import sys
+
+def check_openpyxl():
+    """
+    检查 openpyxl 库是否安装。如果未安装，则打印提示并退出。
+    """
+    try:
+        import openpyxl
+    except ImportError:
+        print("缺少依赖 'openpyxl'，请使用以下命令安装：")
+        print("pip install openpyxl")
+        sys.exit(1)
 
 def load_stock_categories(category_path):
     """
@@ -25,8 +37,7 @@ def load_stock_categories(category_path):
             # 分类名称从文件名中获取，例如 '半导体.xlsx'
             category_name = os.path.basename(f).split('.')[0]
             
-            # 使用 header=0 来确保读取第一行作为列名
-            df = pd.read_excel(f, header=0)
+            df = pd.read_excel(f, header=0, engine='openpyxl')
             
             # 检查列名是否存在
             if '股票代码' not in df.columns or '股票名称' not in df.columns:
@@ -112,9 +123,12 @@ def analyze_holdings():
                 if '最新价' in df.columns:
                     df = df.loc[:, ['序号', '股票代码', '股票名称', '相关资讯', '占净值比例', '持股数 （万股）', '持仓市值', '季度']]
                 
+                # 强制将'占净值比例'列转换为数值，将无法转换的值设为NaN
+                df['占净值比例'] = pd.to_numeric(df['占净值比例'], errors='coerce')
+
                 # 确保股票代码为字符串，用于映射
                 df['股票代码'] = df['股票代码'].astype(str).str.zfill(6)
-
+                
                 # 步骤 2：使用新的分类数据进行映射
                 if use_detailed_categories:
                     df['行业'] = df['股票代码'].map(stock_categories).fillna('其他')
@@ -163,8 +177,10 @@ def analyze_holdings():
                 report.append(f"- **移除股票**：{', '.join(removed_stocks)}")
         
         report.append("\n### 2. 行业偏好和持仓集中度")
-        # 步骤 3：使用新的'行业'列进行分析
         sector_summary = combined_df.groupby(['年份', '行业'])['占净值比例'].sum().unstack().fillna(0)
+        
+        # 强制转换为数值类型，以避免 TypeError
+        sector_summary = sector_summary.astype(float)
         
         report.append("#### 行业偏好（占净值比例之和）")
         formatted_sector_summary = sector_summary.map(lambda x: f"{x:.2f}%" if x > 0 else "")
@@ -200,7 +216,6 @@ def analyze_holdings():
             first_year_summary = sector_summary.iloc[0]
             last_year_summary = sector_summary.iloc[-1]
             
-            # 使用 try-except 块来处理可能出现的空系列
             try:
                 first_dominant_sector = first_year_summary.idxmax()
                 last_dominant_sector = last_year_summary.idxmax()
@@ -221,5 +236,6 @@ def analyze_holdings():
         f.write('\n'.join(report))
 
 if __name__ == "__main__":
+    check_openpyxl()
     analyze_holdings()
     print("分析报告已生成：analysis_report.md")
