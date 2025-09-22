@@ -47,6 +47,14 @@ def analyze_holdings():
                 if '最新价' in df.columns:
                     df = df.loc[:, ['序号', '股票代码', '股票名称', '相关资讯', '占净值比例', '持股数 （万股）', '持仓市值', '季度']]
                 
+                # 修复：清理占净值比例列中的百分比符号和单位
+                if '占净值比例' in df.columns:
+                    # 移除百分比符号和可能的中文单位
+                    df['占净值比例'] = df['占净值比例'].astype(str).str.replace('[\%,％]', '', regex=True)
+                    df['占净值比例'] = df['占净值比例'].str.replace('[(（].*[））]', '', regex=True).str.strip()
+                    # 转换为数值型（百分比形式，100% = 100.0）
+                    df['占净值比例'] = pd.to_numeric(df['占净值比例'], errors='coerce')
+                
                 df['基金代码'] = fund_code
                 df_list.append(df)
             except KeyError as e:
@@ -60,6 +68,13 @@ def analyze_holdings():
             continue
             
         combined_df = pd.concat(df_list, ignore_index=True)
+        
+        # 再次确保占净值比例是数值型
+        if '占净值比例' in combined_df.columns:
+            combined_df['占净值比例'] = pd.to_numeric(combined_df['占净值比例'], errors='coerce')
+            # 移除NaN值
+            combined_df = combined_df.dropna(subset=['占净值比例'])
+        
         combined_df['季度'] = combined_df['季度'].str.replace('年', '-Q')
         combined_df['年份'] = combined_df['季度'].str.split('-').str[0].astype(int)
         combined_df['季度编号'] = combined_df['季度'].str.split('-').str[1].str.replace('季度', '')
@@ -106,13 +121,16 @@ def analyze_holdings():
 
         sector_summary = combined_df.groupby(['年份', '板块'])['占净值比例'].sum().unstack().fillna(0)
         
-        # 修复：确保数据类型为数值型，然后格式化
+        # 确保数据类型为数值型
+        for col in sector_summary.columns:
+            sector_summary[col] = pd.to_numeric(sector_summary[col], errors='coerce').fillna(0)
         sector_summary = sector_summary.astype(float)
+        
         report.append("#### 板块偏好（占净值比例之和）")
         def format_percentage(x):
             if pd.isna(x) or x == 0:
                 return ""
-            return f"{x:.2f}%"
+            return f"{float(x):.2f}%"
         formatted_sector_summary = sector_summary.map(format_percentage)
         report.append(formatted_sector_summary.to_markdown())
 
@@ -120,7 +138,7 @@ def analyze_holdings():
         
         report.append("\n#### 前十大持仓集中度（占净值比例之和）")
         formatted_concentration_summary = pd.DataFrame(concentration_summary)
-        formatted_concentration_summary['占净值比例'] = formatted_concentration_summary['占净值比例'].map(lambda x: f"{x:.2f}%")
+        formatted_concentration_summary['占净值比例'] = formatted_concentration_summary['占净值比例'].map(lambda x: f"{float(x):.2f}%")
         report.append(formatted_concentration_summary.to_markdown())
 
         # 新增：行业和主题热点分析（在原有分析后添加）
@@ -232,14 +250,20 @@ def analyze_holdings():
         
         # 行业偏好总结
         industry_summary = combined_df.groupby(['年份', '行业'])['占净值比例'].sum().unstack().fillna(0)
-        industry_summary = industry_summary.astype(float)  # 确保为数值型
+        # 确保数据类型为数值型
+        for col in industry_summary.columns:
+            industry_summary[col] = pd.to_numeric(industry_summary[col], errors='coerce').fillna(0)
+        industry_summary = industry_summary.astype(float)
         report.append("\n##### 申万一级行业分布")
         formatted_industry_summary = industry_summary.map(format_percentage)
         report.append(formatted_industry_summary.to_markdown())
         
         # 主题热点总结
         theme_summary = combined_df.groupby(['年份', '主题热点'])['占净值比例'].sum().unstack().fillna(0)
-        theme_summary = theme_summary.astype(float)  # 确保为数值型
+        # 确保数据类型为数值型
+        for col in theme_summary.columns:
+            theme_summary[col] = pd.to_numeric(theme_summary[col], errors='coerce').fillna(0)
+        theme_summary = theme_summary.astype(float)
         report.append("\n##### 主题热点分布")
         formatted_theme_summary = theme_summary.map(format_percentage)
         report.append(formatted_theme_summary.to_markdown())
