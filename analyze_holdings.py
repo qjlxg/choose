@@ -2,19 +2,20 @@ import pandas as pd
 import glob
 import os
 import requests
+import re
 from datetime import datetime
 
 # --- 数据下载功能 ---
 def get_public_dates(code: str) -> list:
-    """
-    获取基金持仓的公开日期。
-    
-    参数:
-        code: 基金代码
-        
-    返回:
-        公开持仓的日期列表，例如: ['2023-09-30', '2023-06-30']。
-    """
+    '''
+    获取基金持仓的公开日期
+    -
+    参数
+    -
+        code 基金代码
+    返回
+        公开持仓的日期列表
+    '''
     headers = {
         'Connection': 'keep-alive',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.141 Safari/537.36 Edg/87.0.664.75',
@@ -56,17 +57,19 @@ def get_public_dates(code: str) -> list:
         return []
 
 
-def get_inverst_postion(code: str, date: str) -> pd.DataFrame:
-    """
-    根据基金代码和日期获取基金持仓信息。
-    
-    参数:
-        code: 基金代码
-        date: 公布日期，形如 '2020-09-31'
-        
-    返回:
+def get_inverst_postion(code: str, date=None) -> pd.DataFrame:
+    '''
+    根据基金代码跟日期获取基金持仓信息
+    -
+    参数
+
+        code 基金代码
+        date 公布日期 形如 '2020-09-31' 默认为 None，得到最新公布的数据
+    返回
+
         持仓信息表格
-    """
+
+    '''
     EastmoneyFundHeaders = {
         'User-Agent': 'EMProjJijin/6.2.8 (iPhone; iOS 13.6; Scale/2.00)',
         'GTOKEN': '98B423068C1F4DEF9842F82ADF08C5db',
@@ -75,7 +78,6 @@ def get_inverst_postion(code: str, date: str) -> pd.DataFrame:
         'Host': 'fundmobapi.eastmoney.com',
         'Referer': 'https://mpservice.com/516939c37bdb4ba2b1138c50cf69a2e1/release/pages/FundHistoryNetWorth',
     }
-    
     params = [
         ('FCODE', code),
         ('MobileKey', '3EA024C2-7F22-408B-95E4-383D38160FB3'),
@@ -87,37 +89,29 @@ def get_inverst_postion(code: str, date: str) -> pd.DataFrame:
         ('product', 'EFund'),
         ('serverVersion', '6.2.8'),
         ('version', '6.2.8'),
-        ('DATE', date)
     ]
+    if date is not None:
+        params.append(('DATE', date))
+    params = tuple(params)
 
-    try:
-        response = requests.get(
-            'https://fundmobapi.eastmoney.com/FundMNewApi/FundMNInverstPosition',
-            headers=EastmoneyFundHeaders, 
-            params=params,
-            timeout=10
-        )
-        stocks = response.json().get('Datas', {}).get('fundStocks')
-        if not stocks:
-            return pd.DataFrame()
+    response = requests.get('https://fundmobapi.eastmoney.com/FundMNewApi/FundMNInverstPosition',
+                            headers=EastmoneyFundHeaders, params=params, timeout=10)
+    
+    rows = []
+    stocks = response.json().get('Datas', {}).get('fundStocks')
 
-        df = pd.DataFrame(stocks)
-        
-        columns_mapping = {
-            'GPDM': '股票代码',
-            'GPJC': '股票名称',
-            'JZBL': '占净值比例',
-        }
-        
-        # 筛选并重命名列
-        df_filtered = df[[col for col in columns_mapping.keys() if col in df.columns]]
-        df_filtered = df_filtered.rename(columns=columns_mapping)
-        df_filtered['季度'] = f"{datetime.strptime(date, '%Y-%m-%d').year}年Q{(datetime.strptime(date, '%Y-%m-%d').month-1)//3+1}季度"
+    columns = {
+        'GPDM': '股票代码',
+        'GPJC': '股票简称',
+        'JZBL': '持仓占比(%)',
+        'PCTNVCHG': '较上期变化(%)',
+    }
+    if stocks is None:
+        return pd.DataFrame(rows, columns=columns.values())
 
-        return df_filtered
-    except Exception as e:
-        print(f"获取持仓信息时出错: {e}")
-        return pd.DataFrame()
+    df = pd.DataFrame(stocks)
+    df = df[list(columns.keys())].rename(columns=columns)
+    return df
 
 def download_fund_data(fund_code):
     """
@@ -216,6 +210,13 @@ def analyze_holdings():
             continue
             
         combined_df = pd.concat(df_list, ignore_index=True)
+
+        # 核心修复：强制将 '占净值比例' 列转换为数字
+        combined_df['占净值比例'] = pd.to_numeric(combined_df['占净值比例'], errors='coerce')
+        
+        # 移除转换失败（非数字）的行，因为这些数据无法用于计算
+        combined_df.dropna(subset=['占净值比例'], inplace=True)
+        
         combined_df['季度'] = combined_df['季度'].str.replace('年', '-').str.replace('季度', '')
         combined_df['年份'] = combined_df['季度'].str.split('-').str[0].astype(int)
         combined_df['季度编号'] = combined_df['季度'].str.split('-').str[1]
@@ -323,10 +324,11 @@ if __name__ == "__main__":
     print("1. 如果需要下载新的基金数据，请调用 download_fund_data(fund_code)。")
     print("2. 确保 'fund_data' 目录有数据后，再调用 analyze_holdings() 进行分析。")
     print("-------------------------")
+    
+    # 示例用法：先下载数据，再进行分析
+    # fund_code_to_download = '510050'
+    # print(f"开始下载基金 {fund_code_to_download} 的数据...")
+    # download_fund_data(fund_code_to_download)
 
-    # 示例：
-    # 如果你想下载新基金 '510050' 的数据，可以取消下面这行的注释
-    # download_fund_data('510050')
-
-    # 执行分析功能
+    # 如果 fund_data 目录有数据，直接调用 analyze_holdings()
     analyze_holdings()
