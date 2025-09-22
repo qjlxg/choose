@@ -30,7 +30,8 @@ def load_stock_categories(category_path):
                 print(f"文件 {f} 缺少关键列 '股票代码' 或 '股票名称'，跳过。")
                 continue
             
-            df['股票代码'] = df['股票代码'].astype(str).str.zfill(6)
+            # 清理股票代码列，确保没有多余的空格或特殊字符
+            df['股票代码'] = df['股票代码'].astype(str).str.strip().str.zfill(6)
             
             for code in df['股票代码']:
                 all_categories[code] = category_name
@@ -102,7 +103,8 @@ def analyze_holdings():
                 df['占净值比例'] = df['占净值比例'].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False)
                 df['占净值比例'] = pd.to_numeric(df['占净值比例'], errors='coerce')
                 
-                df['股票代码'] = df['股票代码'].astype(str).str.zfill(6)
+                # 清理股票代码，确保没有空格
+                df['股票代码'] = df['股票代码'].astype(str).str.strip().str.zfill(6)
                 
                 if use_detailed_categories:
                     df['行业'] = df['股票代码'].map(stock_categories).fillna('其他')
@@ -129,6 +131,18 @@ def analyze_holdings():
 
         report.append(f"## 基金代码: {fund_code} 持仓分析报告")
         report.append("---")
+        
+        # 记录未被分类的股票
+        unclassified_stocks = combined_df[combined_df['行业'] == '其他']
+        if not unclassified_stocks.empty:
+            report.append("\n### 未能匹配到行业分类的股票列表")
+            report.append("---")
+            for quarter, group in unclassified_stocks.groupby('季度'):
+                report.append(f"#### {quarter}")
+                for index, row in group.iterrows():
+                    report.append(f"- **{row['股票名称']}** ({row['股票代码']}): 占净值比例 {row['占净值比例']:.2f}%")
+            report.append("---\n")
+
 
         report.append("### 1. 重仓股变动")
         quarters = combined_df['季度'].unique()
