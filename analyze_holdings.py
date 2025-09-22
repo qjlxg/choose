@@ -106,8 +106,14 @@ def analyze_holdings():
 
         sector_summary = combined_df.groupby(['年份', '板块'])['占净值比例'].sum().unstack().fillna(0)
         
+        # 修复：确保数据类型为数值型，然后格式化
+        sector_summary = sector_summary.astype(float)
         report.append("#### 板块偏好（占净值比例之和）")
-        formatted_sector_summary = sector_summary.map(lambda x: f"{x:.2f}%" if x > 0 else "")
+        def format_percentage(x):
+            if pd.isna(x) or x == 0:
+                return ""
+            return f"{x:.2f}%"
+        formatted_sector_summary = sector_summary.map(format_percentage)
         report.append(formatted_sector_summary.to_markdown())
 
         concentration_summary = combined_df.groupby('季度')['占净值比例'].sum()
@@ -226,14 +232,16 @@ def analyze_holdings():
         
         # 行业偏好总结
         industry_summary = combined_df.groupby(['年份', '行业'])['占净值比例'].sum().unstack().fillna(0)
+        industry_summary = industry_summary.astype(float)  # 确保为数值型
         report.append("\n##### 申万一级行业分布")
-        formatted_industry_summary = industry_summary.map(lambda x: f"{x:.2f}%" if x > 0 else "")
+        formatted_industry_summary = industry_summary.map(format_percentage)
         report.append(formatted_industry_summary.to_markdown())
         
         # 主题热点总结
         theme_summary = combined_df.groupby(['年份', '主题热点'])['占净值比例'].sum().unstack().fillna(0)
+        theme_summary = theme_summary.astype(float)  # 确保为数值型
         report.append("\n##### 主题热点分布")
-        formatted_theme_summary = theme_summary.map(lambda x: f"{x:.2f}%" if x > 0 else "")
+        formatted_theme_summary = theme_summary.map(format_percentage)
         report.append(formatted_theme_summary.to_markdown())
 
         # 3. 动态趋势总结和投资建议
