@@ -45,15 +45,26 @@ def analyze_holdings():
                 df.rename(columns=column_mapping, inplace=True)
 
                 if '最新价' in df.columns:
-                    df = df.loc[:, ['序号', '股票代码', '股票名称', '相关资讯', '占净值比例', '持股数 （万股）', '持仓市值', '季度']]
+                    # 修复：只选择实际存在的列
+                    required_cols = ['序号', '股票代码', '股票名称', '相关资讯', '占净值比例', '持股数 （万股）', '持仓市值', '季度']
+                    available_cols = [col for col in required_cols if col in df.columns]
+                    if len(available_cols) < 4:  # 至少要有股票代码、名称、比例、季度
+                        print(f"文件 {f} 缺少必要列，跳过")
+                        continue
+                    df = df.loc[:, available_cols]
                 
-                # 修复：清理占净值比例列中的百分比符号和单位
+                # 修复：清理占净值比例列中的百分比符号和单位（使用原始字符串）
                 if '占净值比例' in df.columns:
                     # 移除百分比符号和可能的中文单位
-                    df['占净值比例'] = df['占净值比例'].astype(str).str.replace('[\%,％]', '', regex=True)
-                    df['占净值比例'] = df['占净值比例'].str.replace('[(（].*[））]', '', regex=True).str.strip()
+                    df['占净值比例'] = df['占净值比例'].astype(str).str.replace(r'[\%,％]', '', regex=True)
+                    df['占净值比例'] = df['占净值比例'].str.replace(r'[(（].*[））]', '', regex=True).str.strip()
                     # 转换为数值型（百分比形式，100% = 100.0）
                     df['占净值比例'] = pd.to_numeric(df['占净值比例'], errors='coerce')
+                
+                # 确保有季度列
+                if '季度' not in df.columns:
+                    print(f"文件 {f} 缺少季度列，跳过")
+                    continue
                 
                 df['基金代码'] = fund_code
                 df_list.append(df)
@@ -65,6 +76,7 @@ def analyze_holdings():
                 continue
         
         if not df_list:
+            print(f"基金 {fund_code} 没有有效的数据文件，跳过")
             continue
             
         combined_df = pd.concat(df_list, ignore_index=True)
@@ -75,7 +87,12 @@ def analyze_holdings():
             # 移除NaN值
             combined_df = combined_df.dropna(subset=['占净值比例'])
         
-        combined_df['季度'] = combined_df['季度'].str.replace('年', '-Q')
+        # 检查是否有足够的数据
+        if combined_df.empty:
+            print(f"基金 {fund_code} 处理后数据为空，跳过")
+            continue
+        
+        combined_df['季度'] = combined_df['季度'].astype(str).str.replace('年', '-Q')
         combined_df['年份'] = combined_df['季度'].str.split('-').str[0].astype(int)
         combined_df['季度编号'] = combined_df['季度'].str.split('-').str[1].str.replace('季度', '')
         combined_df.sort_values(by=['年份', '季度编号'], inplace=True)
@@ -85,23 +102,26 @@ def analyze_holdings():
 
         report.append("### 1. 重仓股变动")
         quarters = combined_df['季度'].unique()
-        for i in range(len(quarters) - 1):
-            current_q = quarters[i]
-            next_q = quarters[i+1]
-            
-            current_holdings = set(combined_df[combined_df['季度'] == current_q]['股票代码'])
-            next_holdings = set(combined_df[combined_df['季度'] == next_q]['股票代码'])
-            
-            new_additions = next_holdings - current_holdings
-            removed = current_holdings - next_holdings
-            
-            report.append(f"#### 从 {current_q} 到 {next_q} 的变动")
-            if new_additions:
-                new_add_stocks = combined_df[(combined_df['季度'] == next_q) & (combined_df['股票代码'].isin(new_additions))]['股票名称'].tolist()
-                report.append(f"- **新增股票**：{', '.join(new_add_stocks)}")
-            if removed:
-                removed_stocks = combined_df[(combined_df['季度'] == current_q) & (combined_df['股票代码'].isin(removed))]['股票名称'].tolist()
-                report.append(f"- **移除股票**：{', '.join(removed_stocks)}")
+        if len(quarters) > 1:
+            for i in range(len(quarters) - 1):
+                current_q = quarters[i]
+                next_q = quarters[i+1]
+                
+                current_holdings = set(combined_df[combined_df['季度'] == current_q]['股票代码'])
+                next_holdings = set(combined_df[combined_df['季度'] == next_q]['股票代码'])
+                
+                new_additions = next_holdings - current_holdings
+                removed = current_holdings - next_holdings
+                
+                report.append(f"#### 从 {current_q} 到 {next_q} 的变动")
+                if new_additions:
+                    new_add_stocks = combined_df[(combined_df['季度'] == next_q) & (combined_df['股票代码'].isin(new_additions))]['股票名称'].tolist()
+                    report.append(f"- **新增股票**：{', '.join(new_add_stocks)}")
+                if removed:
+                    removed_stocks = combined_df[(combined_df['季度'] == current_q) & (combined_df['股票代码'].isin(removed))]['股票名称'].tolist()
+                    report.append(f"- **移除股票**：{', '.join(removed_stocks)}")
+        else:
+            report.append("#### 仅有一个季度数据，无法分析变动")
         
         report.append("\n### 2. 行业偏好和持仓集中度")
         sector_mapping = {
@@ -285,6 +305,8 @@ def analyze_holdings():
                 report.append("- **持仓集中度**：在分析期内，该基金的持仓集中度显著**下降**。这表明基金经理正在分散投资，这通常有助于降低风险，但可能牺牲部分超额收益。")
             else:
                 report.append("- **持仓集中度**：该基金的持仓集中度在分析期内相对**稳定**。这可能表明基金经理的投资风格较为稳健，并坚持其既定的投资策略。")
+        else:
+            report.append("- **持仓集中度**：仅有一个季度数据，无法分析变化趋势")
 
         # 板块偏好变化分析 (使用原始数值数据)
         if len(sector_summary) > 1:
@@ -298,6 +320,13 @@ def analyze_holdings():
                 report.append(f"- **板块偏好**：基金的投资偏好在分析期内发生了明显变化，从最初主要集中在**{first_dominant_sector}**转向了**{last_dominant_sector}**。这可能反映了基金经理对市场热点或宏观经济的最新判断。")
             else:
                 report.append(f"- **板块偏好**：该基金在分析期内保持了相对稳定的投资风格，主要偏向于**{first_dominant_sector}**板块。")
+        else:
+            first_year_summary = sector_summary.iloc[0] if len(sector_summary) > 0 else pd.Series()
+            if not first_year_summary.empty:
+                dominant_sector = first_year_summary.idxmax()
+                report.append(f"- **板块偏好**：该基金主要偏向于**{dominant_sector}**板块。")
+            else:
+                report.append("- **板块偏好**：无法分析板块分布")
         
         # 新增：行业偏好变化分析
         if len(industry_summary) > 1:
@@ -311,6 +340,13 @@ def analyze_holdings():
                 report.append(f"- **行业偏好**：基金的行业配置在分析期内发生了明显变化，从最初主要集中在**{first_dominant_industry}**行业转向了**{last_dominant_industry}**行业。")
             else:
                 report.append(f"- **行业偏好**：该基金在分析期内保持了相对稳定的行业配置，主要偏向于**{first_dominant_industry}**行业。")
+        else:
+            first_year_industry = industry_summary.iloc[0] if len(industry_summary) > 0 else pd.Series()
+            if not first_year_industry.empty:
+                dominant_industry = first_year_industry.idxmax()
+                report.append(f"- **行业偏好**：该基金主要偏向于**{dominant_industry}**行业。")
+            else:
+                report.append("- **行业偏好**：无法分析行业分布")
         
         # 新增：主题热点变化分析
         if len(theme_summary) > 1:
@@ -324,13 +360,23 @@ def analyze_holdings():
                 report.append(f"- **主题热点**：基金的主题投资在分析期内发生了明显变化，从最初主要集中在**{first_dominant_theme}**主题转向了**{last_dominant_theme}**主题。")
             else:
                 report.append(f"- **主题热点**：该基金在分析期内保持了相对稳定的主题投资，主要偏向于**{first_dominant_theme}**主题。")
+        else:
+            first_year_theme = theme_summary.iloc[0] if len(theme_summary) > 0 else pd.Series()
+            if not first_year_theme.empty:
+                dominant_theme = first_year_theme.idxmax()
+                report.append(f"- **主题热点**：该基金主要偏向于**{dominant_theme}**主题。")
+            else:
+                report.append("- **主题热点**：无法分析主题分布")
         
         # 增加通用建议
         report.append("\n**总结与建议：**")
         report.append("  在考虑投资该基金时，建议将上述分析结果与其他因素结合考量，例如基金的过往业绩、基金经理的管理经验、基金规模以及费率等。")
+        
+        report.append("\n---\n")  # 在每个基金报告后添加分隔线
 
 
     with open('analysis_report.md', 'w', encoding='utf-8') as f:
+        f.write('# 基金持仓分析报告\n\n')
         f.write('\n'.join(report))
 
 if __name__ == "__main__":
