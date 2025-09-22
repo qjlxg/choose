@@ -123,7 +123,12 @@ def analyze_holdings():
                 if '最新价' in df.columns:
                     df = df.loc[:, ['序号', '股票代码', '股票名称', '相关资讯', '占净值比例', '持股数 （万股）', '持仓市值', '季度']]
                 
-                # 强制将'占净值比例'列转换为数值，将无法转换的值设为NaN
+                # 新增步骤：在转换前清理'占净值比例'列
+                # 移除百分号
+                df['占净值比例'] = df['占净值比例'].astype(str).str.replace('%', '', regex=False)
+                # 移除逗号（千位分隔符）
+                df['占净值比例'] = df['占净值比例'].str.replace(',', '', regex=False)
+                # 强制将清理后的列转换为数值，将无法转换的值设为NaN
                 df['占净值比例'] = pd.to_numeric(df['占净值比例'], errors='coerce')
 
                 # 确保股票代码为字符串，用于映射
