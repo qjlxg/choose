@@ -18,7 +18,8 @@ def check_dependencies():
     """检查所有脚本的 Python 库和系统依赖"""
     required_modules = [
         'pandas', 'numpy', 'requests', 'akshare', 'selenium', 'tenacity',
-        'beautifulsoup4', 'lxml', 'openpyxl', 'scrapy', 'html5lib', 'tabulate', 'schedule'
+        'beautifulsoup4', 'lxml', 'openpyxl', 'scrapy', 'html5lib', 'tabulate',
+        'urllib3', 'schedule', 'firebase_admin', 'glob2'  # 用 glob2，移除 glob3
     ]
     for module in required_modules:
         if not importlib.util.find_spec(module):
@@ -26,11 +27,14 @@ def check_dependencies():
             sys.exit(1)
         logger.info(f"依赖 {module} 检测通过")
 
-    # 检查 ChromeDriver（为 fund_analyzer.py）
+    # 检查 ChromeDriver
     try:
         from selenium import webdriver
         options = webdriver.ChromeOptions()
-        options.add_argument('--headless')  # 无头模式，适合 CI
+        options.add_argument('--headless')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')  # 兼容 GitHub Actions
         driver = webdriver.Chrome(options=options)
         driver.quit()
         logger.info("ChromeDriver 检测通过")
