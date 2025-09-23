@@ -591,7 +591,7 @@ class MarketMonitor:
         # 步骤3: 多线程网络下载和处理
         if fund_codes_to_fetch:
             logger.info("开始使用多线程获取 %d 个基金的新数据...", len(fund_codes_to_fetch))
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
                 future_to_code = {executor.submit(self._process_single_fund, code): code for code in fund_codes_to_fetch}
                 for future in concurrent.futures.as_completed(future_to_code):
                     fund_code = future_to_code[future]
