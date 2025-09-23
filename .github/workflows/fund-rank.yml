@@ -1,0 +1,56 @@
+name: Fund Rank Analysis
+
+# This workflow is triggered by a manual run or on a daily schedule.
+on:
+  workflow_dispatch:
+  schedule:
+    # Runs at 1 AM UTC every day.
+    - cron: '0 1 * * *'
+
+jobs:
+  run-fund-analysis:
+    runs-on: ubuntu-latest
+    
+    # The steps that will be executed as part of this job.
+    steps:
+      # Step 1: Check out the repository so the workflow can access your code.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up a Python environment.
+      # NOTE: Your script appears to be written for Python 2.
+      # You may need to update the `print` statements and `urllib2` library
+      # to `urllib.request` to be compatible with Python 3.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # Step 3: Install any required dependencies.
+      # The script seems to use only built-in libraries, but this is a good
+      # place to add any `pip install` commands if you add new dependencies.
+      - name: Install dependencies
+        run: |
+          echo "No external dependencies to install."
+
+      # Step 4: Run the Python script with dynamic dates.
+      # This calculates the start date (30 days ago) and end date (yesterday).
+      - name: Run fund analysis script
+        id: run-script
+        run: |
+          # Calculate the start and end dates in YYYY-MM-DD format.
+          # We use `date` command with specific flags for the calculation.
+          START_DATE=$(date --date='30 days ago' +'%Y-%m-%d')
+          END_DATE=$(date --date='yesterday' +'%Y-%m-%d')
+          
+          echo "Running script from $START_DATE to $END_DATE"
+          python fund-rank.py "$START_DATE" "$END_DATE"
+
+      # Step 5: Upload the generated report file as a workflow artifact.
+      # The report file is named `result_STARTDATE_ENDDATE.txt`.
+      - name: Upload fund rank report
+        uses: actions/upload-artifact@v4
+        with:
+          name: fund-rank-report
+          path: result_*.txt
+          if-no-files-found: ignore
