@@ -1,0 +1,43 @@
+name: Fund Analysis Workflow
+
+on:
+  schedule:
+    - cron: '0 9 * * *'  # 每天北京时间17:00运行（UTC+8为9:00 UTC）
+  workflow_dispatch:  # 支持手动触发
+
+jobs:
+  analyze-funds:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy requests akshare selenium tenacity concurrent.futures beautifulsoup4 lxml glob3 urllib3 json re threading queue schedule
+
+      - name: Run integrate_fund_rank.py
+        run: python integrate_fund_rank.py
+
+      - name: Commit and push results
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add result_*.txt recommended_cn_funds.csv analysis_report.md market_monitor_report.md data/*.csv
+          git commit -m "Update fund analysis results for $(date +%Y-%m-%d)" || echo "No changes to commit"
+          git push
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fund-reports
+          path: |
+            result_*.txt
+            analysis_report.md
+            market_monitor_report.md
+            data/*.csv
