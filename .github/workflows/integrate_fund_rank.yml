@@ -6,7 +6,7 @@ on:
   workflow_dispatch:  # 支持手动触发
   push:
     paths:
-      - '.github/workflows/integrate_fund_rank.yml'  # 当 fund-analysis.yml 改动时触发
+      - '.github/workflows/integrate_fund_rank.yml'  # 当此 YML 改动时触发
 
 jobs:
   analyze-funds:
@@ -18,21 +18,28 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'  # 匹配你的脚本，可调整为 3.8 如果需要
+          python-version: '3.12'  # 匹配你的脚本
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          # 安装 Chromium 和 ChromeDriver
+          # 安装 snapd（确保 snap 正常）
+          sudo apt-get install -y snapd
+          sudo systemctl start snapd
+          sudo systemctl enable snapd
+          # 安装 Chromium 和 ChromeDriver（会触发 snap 安装）
           sudo apt-get install -y chromium-browser chromium-chromedriver
-          # 处理符号链接冲突
+          # 等待 snap 安装完成
+          sleep 10
+          # 处理符号链接：链接到 snap 的 chromedriver 路径
           sudo rm -f /usr/bin/chromedriver
-          sudo ln -s /usr/lib/chromium-browser/chromedriver /usr/bin/chromedriver
-          # 验证安装
-          chromium-browser --version
+          sudo ln -s /snap/bin/chromium.chromedriver /usr/bin/chromedriver
+          # 验证路径和版本
+          which chromedriver
           chromedriver --version
           # 停止 Chromium daemon（避免冲突）
           sudo systemctl stop chromium-browser || echo "Chromium daemon not running"
+          sudo snap stop chromium || echo "Snap chromium not running"
 
       - name: Install Python dependencies
         run: |
