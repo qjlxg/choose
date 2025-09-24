@@ -4,8 +4,8 @@ name: Fund Rank Analysis
 on:
   workflow_dispatch:
   schedule:
-    # Runs at 1 AM UTC every day.
-    - cron: '0 1 * * *'
+    
+    - cron: '18 13 * * 1'
 
 jobs:
   run-fund-analysis:
