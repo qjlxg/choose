@@ -1,56 +1,57 @@
+# 工作流名称：基金排名分析
 name: Fund Rank Analysis
 
-# This workflow is triggered by a manual run or on a daily schedule.
+# 工作流触发条件
 on:
+  # 1. 允许手动触发工作流
   workflow_dispatch:
+  
+  # 2. 定时调度运行
   schedule:
+    - cron: '18 13 * * 1' # 每周一北京时间 21:18 运行 (UTC 13:18 = CST 21:18)
     
-    - cron: '18 13 * * 1'
+  # 3. 指定文件被修改并推送到仓库时自动触发
+  push:
+    paths:
+      - 'fund-rank.py'              # 基金分析脚本
+      - 'fund-rank.yml'             # 工作流文件本身
+      - 'recommended_cn_funds.csv'  # 基金数据源文件
 
 jobs:
+  # 定义一个名为 'run-fund-analysis' 的作业
   run-fund-analysis:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # 在最新的 Ubuntu 运行器上执行作业
     
-    # The steps that will be executed as part of this job.
+    # 将要作为此作业的一部分执行的步骤
     steps:
-      # Step 1: Check out the repository so the workflow can access your code.
-      - name: Checkout repository
+      # 步骤 1: 检出仓库代码
+      - name: 检出仓库代码 (Checkout repository)
         uses: actions/checkout@v4
 
-      # Step 2: Set up a Python environment.
-      # NOTE: Your script appears to be written for Python 2.
-      # You may need to update the `print` statements and `urllib2` library
-      # to `urllib.request` to be compatible with Python 3.
-      - name: Set up Python
+      # 步骤 2: 设置 Python 环境
+      - name: 设置 Python 环境 (Set up Python)
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: '3.x' # 使用 Python 3.x 版本
 
-      # Step 3: Install any required dependencies.
-      # The script seems to use only built-in libraries, but this is a good
-      # place to add any `pip install` commands if you add new dependencies.
-      - name: Install dependencies
+      # 步骤 3: 安装依赖（此脚本主要使用内置库）
+      - name: 安装依赖 (Install dependencies)
         run: |
-          echo "No external dependencies to install."
+          echo "无外部依赖需要安装。"
 
-      # Step 4: Run the Python script with dynamic dates.
-      # This calculates the start date (30 days ago) and end date (yesterday).
-      - name: Run fund analysis script
+      # 步骤 4: 运行 Python 脚本并传入动态日期参数
+      # 计算起始日期（30天前）和结束日期（昨天）
+      - name: 运行基金分析脚本 (Run fund analysis script)
         id: run-script
         run: |
-          # Calculate the start and end dates in YYYY-MM-DD format.
-          # We use `date` command with specific flags for the calculation.
+          # 计算起始日期 (30天前) 和结束日期 (昨天)，格式为 YYYY-MM-DD
           START_DATE=$(date --date='30 days ago' +'%Y-%m-%d')
           END_DATE=$(date --date='yesterday' +'%Y-%m-%d')
           
-          echo "Running script from $START_DATE to $END_DATE"
+          echo "脚本运行日期范围: $START_DATE 到 $END_DATE"
+          # 执行 Python 脚本，并将计算出的日期作为命令行参数传入
+          # 运行结果文件 (result_*.txt) 将直接保存在根目录
           python fund-rank.py "$START_DATE" "$END_DATE"
-
-      # Step 5: Upload the generated report file as a workflow artifact.
-      # The report file is named `result_STARTDATE_ENDDATE.txt`.
-      - name: Upload fund rank report
-        uses: actions/upload-artifact@v4
-        with:
-          name: fund-rank-report
-          path: result_*.txt
-          if-no-files-found: ignore
+          
+      # ⚠️ 注意: 已根据您的要求，移除原有的 Step 5: 上传报告文件步骤。
+      # 运行结果 result_*.txt 文件将保留在 GitHub Actions Runner 的根目录，不会作为 Artifact 上传。
