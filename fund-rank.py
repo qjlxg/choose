@@ -91,21 +91,19 @@ def worker(q, strsdate, stredate, result_queue):
         print('process fund:\t' + fund[0] + '\t' + fund[2])
         q.task_done()
 
-# --- 从 CSV 文件加载基金列表 ---
-def load_fund_list_from_csv(url):
+# --- 从本地 CSV 文件加载基金列表 ---
+def load_fund_list_from_csv():
     try:
-        response = urllib.request.urlopen(url)
-        csv_content = response.read().decode('utf-8')
-        csv_file = io.StringIO(csv_content)
-        reader = csv.DictReader(csv_file)
-        fund_list = []
-        for row in reader:
-            # 假设 CSV 中的 '代码' 是基金代码，'名称' 是基金名称，类型默认为混合型
-            fund = [row['代码'], '', row['名称'], '混合型', '', '']
-            fund_list.append(fund)
-        return fund_list
+        with open('recommended_cn_funds.csv', 'r', encoding='utf-8') as csv_file:
+            reader = csv.DictReader(csv_file)
+            fund_list = []
+            for row in reader:
+                # 使用 CSV 中的 '代码' 和 '名称' 字段，构造与原有格式兼容的列表
+                fund = [row['代码'], '', row['名称'], '混合型', '', '']
+                fund_list.append(fund)
+            return fund_list
     except Exception as e:
-        print(f"Error loading CSV: {e}")
+        print(f"Error loading local CSV: {e}")
         return []
 
 # --- 主函数 ---
@@ -155,9 +153,8 @@ def main(argv):
         print(jingzhimin + '\t\t' + jingzhimax + '\t\t' + str(jingzhidif) + '\t' + str(jingzhirise) + '%')
         sys.exit(0)
         
-    # 从 CSV 文件加载基金列表
-    csv_url = 'https://raw.githubusercontent.com/qjlxg/rep/main/recommended_cn_funds.csv'
-    all_funds_list = load_fund_list_from_csv(csv_url)
+    # 从本地 CSV 文件加载基金列表
+    all_funds_list = load_fund_list_from_csv()
     
     if not all_funds_list:
         # 如果 CSV 加载失败，回退到原有逻辑
