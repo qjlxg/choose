@@ -19,7 +19,7 @@ def usage():
     print('\tdate format ****-**-**')
     print('\t\tstart-date must before end-date')
     print('\tfund-code default none')
-    print('\t\tif not input, get top 20 funds from all more than 6400 funds')
+    print('\t\tif not input, get top 20 funds from recommended_cn_funds.csv')
     print('\t\telse get that fund\'s rate of rise\n')
     print('\teg:\tpython fund-rank.py 2017-03-01 2017-03-25')
     print('\teg:\tpython fund-rank.py 2017-03-01 2017-03-25 377240')
@@ -157,25 +157,8 @@ def main(argv):
     all_funds_list = load_fund_list_from_csv()
     
     if not all_funds_list:
-        # 如果 CSV 加载失败，回退到原有逻辑
-        fundlist_files = glob.glob('fundlist-*.txt')
-        if (len(fundlist_files) > 0):
-            file_object = open(fundlist_files[0], 'r')
-            try:
-                all_funds_txt = file_object.read()
-            finally:
-                file_object.close()
-        else:
-            response_all_funds = urllib.request.urlopen('http://fund.eastmoney.com/js/fundcode_search.js')
-            all_funds_txt = response_all_funds.read().decode('utf-8')
-            file_object = open('fundlist-' + strtoday + '.txt', 'w')
-            try:
-                file_object.write(all_funds_txt)
-            finally:
-                file_object.close()
-        
-        all_funds_txt = all_funds_txt[all_funds_txt.find('=')+2:all_funds_txt.rfind(';')]
-        all_funds_list = json.loads(all_funds_txt)
+        print('Failed to load recommended_cn_funds.csv. Please ensure the file exists and is correctly formatted.')
+        sys.exit(1)
     
     print('筛选中，只处理场外C类基金...')
     c_funds_list = []
