@@ -24,9 +24,12 @@ jobs:
     
     # 将要作为此作业的一部分执行的步骤
     steps:
-      # 步骤 1: 检出仓库代码
+      # 步骤 1: 检出仓库代码 (必须使用 token 来允许后续的 git push)
       - name: 检出仓库代码 (Checkout repository)
         uses: actions/checkout@v4
+        with:
+          # 关键：使用 GITHUB_TOKEN，以便能够推送到仓库
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # 步骤 2: 设置 Python 环境
       - name: 设置 Python 环境 (Set up Python)
@@ -34,13 +37,12 @@ jobs:
         with:
           python-version: '3.x' # 使用 Python 3.x 版本
 
-      # 步骤 3: 安装依赖（此脚本主要使用内置库）
+      # 步骤 3: 安装依赖
       - name: 安装依赖 (Install dependencies)
         run: |
           echo "无外部依赖需要安装。"
 
       # 步骤 4: 运行 Python 脚本并传入动态日期参数
-      # 计算起始日期（30天前）和结束日期（昨天）
       - name: 运行基金分析脚本 (Run fund analysis script)
         id: run-script
         run: |
@@ -49,9 +51,31 @@ jobs:
           END_DATE=$(date --date='yesterday' +'%Y-%m-%d')
           
           echo "脚本运行日期范围: $START_DATE 到 $END_DATE"
-          # 执行 Python 脚本，并将计算出的日期作为命令行参数传入
-          # 运行结果文件 (result_*.txt) 将直接保存在根目录
+          # 执行 Python 脚本
           python fund-rank.py "$START_DATE" "$END_DATE"
           
-      # ⚠️ 注意: 已根据您的要求，移除原有的 Step 5: 上传报告文件步骤。
-      # 运行结果 result_*.txt 文件将保留在 GitHub Actions Runner 的根目录，不会作为 Artifact 上传。
+      # 步骤 5: 将结果文件提交并推送到仓库 (使用 Git 替代 Artifact)
+      - name: 提交并推送结果文件 (Commit and Push results)
+        run: |
+          END_DATE=$(date --date='yesterday' +'%Y-%m-%d')
+          
+          # 1. 配置 Git 身份
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # 2. 将生成的结果文件添加到 Git 暂存区
+          # '|| true' 确保即使文件不存在也不会导致作业失败
+          git add result_*.txt || true 
+          
+          # 3. 检查是否有新的文件变更需要提交 (如果 git diff --cached 成功返回 0，表示有变更)
+          # 注意: --exit-code 返回非 0 表示没有差异
+          if ! git diff --cached --exit-code; then
+            # 4. 提交变更
+            git commit -m "chore: 自动更新基金排名文件 for ${END_DATE}"
+            
+            # 5. 推送变更到 GitHub 仓库
+            echo "--- 正在推送文件到仓库 ---"
+            git push
+          else
+            echo "没有新的排名文件生成或内容无变化，跳过提交。"
+          fi
