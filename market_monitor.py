@@ -11,6 +11,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from tenacity import retry, stop_after_attempt, wait_fixed, after_log
+from io import BytesIO
 
 # 配置日志
 logging.basicConfig(
@@ -81,8 +82,26 @@ class MarketMonitor:
                 return {line.strip() for line in f}
         try:
             response = self.session.get(HOLIDAYS_URL, timeout=10)
-            df = pd.read_excel(response.content, engine='openpyxl')
-            holidays = set(df['节假日'].dt.strftime('%Y-%m-%d'))
+            
+            try:
+                # 尝试使用 openpyxl 读取，如果失败则抛出 ImportError
+                df = pd.read_excel(BytesIO(response.content), engine='openpyxl')
+            except ImportError:
+                logging.error("依赖库 openpyxl 未安装，无法处理 xlsx 文件。请运行 'pip install openpyxl' 安装。")
+                return set()
+            
+            holidays_col = None
+            # 查找包含“节假日”的列
+            for col in df.columns:
+                if '节假日' in str(col):
+                    holidays_col = col
+                    break
+
+            if not holidays_col:
+                logging.error("无法在节假日文件中找到 '节假日' 列，请检查数据源。")
+                return set()
+
+            holidays = set(pd.to_datetime(df[holidays_col]).dt.strftime('%Y-%m-%d'))
             with open(HOLIDAYS_FILE, 'w', encoding='utf-8') as f:
                 for h in holidays:
                     f.write(f"{h}\n")
@@ -100,9 +119,16 @@ class MarketMonitor:
             url = "http://push2.eastmoney.com/api/qt/stock/kline/get?cb=jQuery112404095400977226164_1625463137537&secid=1.000300&ut=fa5fd1943c7112009228b3f17d721a71&fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58%2Cf59%2Cf60%2Cf61&klt=101&fqt=1&end=20500101&lmt=120"
             response = self.session.get(url, timeout=10)
             match = re.search(r'\(({.*?})\)', response.text)
+            
             if not match:
                 raise ValueError("无法解析指数数据。")
-            data = pd.DataFrame(eval(match.group(1))['data']['klines']).iloc[::-1]
+            
+            parsed_data = eval(match.group(1))
+            if not parsed_data['data'] or not parsed_data['data']['klines']:
+                logging.warning("大盘数据API返回数据为空。")
+                return pd.DataFrame()
+            
+            data = pd.DataFrame(parsed_data['data']['klines']).iloc[::-1]
             data.columns = ['date', 'open', 'close', 'high', 'low', 'volume', 'turnover', 'amplitude', 'change_percent', 'change_amount']
             data['date'] = pd.to_datetime(data['date']).dt.date
             data['change_percent'] = pd.to_numeric(data['change_percent'])
@@ -119,6 +145,7 @@ class MarketMonitor:
             return '未知'
         
         today = date.today()
+        # 确保数据是按日期排序的，并选择最新的交易日
         latest_trading_date_df = self.sh_index_data[self.sh_index_data['date'] <= today].iloc[-1]
         
         change_percent = latest_trading_date_df['change_percent']
