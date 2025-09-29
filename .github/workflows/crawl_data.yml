@@ -7,7 +7,7 @@ on:
       - 'fund_crawler.py'
       - 'requirements.txt'
   schedule:
-    - cron: '18 13 * * 1'  
+    - cron: '0 */3 * * *' 
   workflow_dispatch:
 
 jobs:
