@@ -8,6 +8,8 @@ on:
       - 'analyze_holdings.py'
       - '.github/workflows/fund_analysis_workflow.yml'
   workflow_dispatch:
+  schedule:
+     - cron: '0 */3 * * *'
 jobs:
   analyze-and-report:
     runs-on: ubuntu-latest
