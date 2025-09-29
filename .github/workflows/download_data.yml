@@ -3,8 +3,7 @@ name: Download and Update Index Data
 on:
   # 定时任务：每天早上 9:00 (北京时间) 运行
   schedule:
-    - cron: '0 6 * * *' # UTC 1:00 = 北京时间 9:00
-  # 手动触发：也可以在 GitHub Actions 页面手动运行此工作流
+   - cron: '0 */3 * * *'
   workflow_dispatch:
   # 在指定文件更改时自动运行
   push:
